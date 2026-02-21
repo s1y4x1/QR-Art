@@ -139,6 +139,36 @@ function stopGifPreview() {
     gifPreviewRunning = false;
 }
 
+function getAutoCellSizeCandidate() {
+    if (!importState.active || !previewImg) return null;
+    const imgW = previewImg.naturalWidth || previewImg.width || 0;
+    const imgH = previewImg.naturalHeight || previewImg.height || 0;
+    if (imgW === 0 || imgH === 0) return null;
+    if (!generatedQR) return null;
+
+    const ovStyle = window.getComputedStyle(importOverlay);
+    const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
+    const ovBorderRight = parseFloat(ovStyle.borderRightWidth) || 0;
+    const currentContentW = Math.max(0, importState.width - ovBorderLeft - ovBorderRight);
+    if (currentContentW <= 0) return null;
+
+    const zoom = zoomLevel || 1;
+    const outputImageW = currentContentW / zoom;
+    const scale = imgW / outputImageW;
+    if (!Number.isFinite(scale) || scale <= 0) return null;
+
+    const targetSize = Math.max(0.1, Math.round(CELL_SIZE * scale * 10) / 10);
+    return targetSize;
+}
+
+function updateAutoCellSizeButtonLabel() {
+    if (!cellSizeAutoBtn) return;
+    if (!importState.active || !hasImageUpload) return;
+    const candidate = getAutoCellSizeCandidate();
+    if (!candidate) return;
+    cellSizeAutoBtn.textContent = `自动（约${candidate.toFixed(1)}）`;
+}
+
 function setStaticGifPreview() {
     if (!uploadInfo || !uploadInfo.gifFrames || !uploadInfo.gifFrames.length) return;
     const width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
@@ -186,9 +216,7 @@ function startGifPreview() {
         }
         applyImport(false, gifPreviewCanvas);
         renderQR(false, gifPreviewCanvas);
-        if (previewImg) {
-            previewImg.src = canvas.toDataURL('image/png');
-        }
+        if (previewImg) previewImg.src = gifPreviewCanvas.toDataURL('image/png');
 
         const delay = fullFrame ? Math.max(10, fullFrame.delay || 10) : getGifFrameDelayMs(frame);
         gifPreviewIndex = (gifPreviewIndex + 1) % uploadInfo.gifFrames.length;
@@ -759,19 +787,8 @@ function applyOriginalImageSize() {
 
     if (!generatedQR) return;
     const oldSize = CELL_SIZE;
-    if (importState.width <= 0) return;
-
-    const ovStyle = window.getComputedStyle(importOverlay);
-    const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
-    const ovBorderRight = parseFloat(ovStyle.borderRightWidth) || 0;
-    const currentContentW = Math.max(0, importState.width - ovBorderLeft - ovBorderRight);
-    if (currentContentW <= 0) return;
-
-    const zoom = zoomLevel || 1;
-    const outputImageW = currentContentW / zoom;
-    const scale = imgW / outputImageW;
-    if (scale <= 0) return;
-    const targetSize = Math.max(0.1, Math.round(oldSize * scale * 10) / 10);
+    const targetSize = getAutoCellSizeCandidate();
+    if (!targetSize) return;
     const ratio = targetSize / oldSize;
 
     const oldRelX = importState.relX;
@@ -2489,6 +2506,7 @@ function updateOverlayTransform() {
     importOverlay.style.height = importState.height + 'px';
     importOverlay.style.left = importState.x + 'px';
     importOverlay.style.top = importState.y + 'px';
+    updateAutoCellSizeButtonLabel();
 }
 
 function updateOverlayVisibility() {
