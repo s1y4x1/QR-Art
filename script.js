@@ -508,6 +508,7 @@ function init() {
 
         hasUserEdits = false;
         hasImageUpload = false;
+        maskPattern = -1;
         updateMaskControls();
 
         updateQR();
@@ -819,7 +820,11 @@ function setMaskPattern(nextMask) {
 
 function lockAutoMaskIfNeeded() {
     if (!canUseAutoMask() && maskPattern === -1) {
-        maskPattern = lastManualMask;
+        const autoMask = (typeof bestAutoMask === 'number' && bestAutoMask >= 0)
+            ? bestAutoMask
+            : ((lastState && typeof lastState.mask === 'number' && lastState.mask >= 0) ? lastState.mask : 0);
+        maskPattern = autoMask;
+        lastManualMask = autoMask;
         updateQR();
     }
     updateMaskControls();
@@ -838,6 +843,7 @@ function setupMaskButtons() {
 function guessMimeFromName(name) {
     if (!name) return null;
     const lower = name.toLowerCase();
+    if (lower.endsWith('.apng')) return 'image/apng';
     if (lower.endsWith('.png')) return 'image/png';
     if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
     if (lower.endsWith('.gif')) return 'image/gif';
@@ -2241,6 +2247,7 @@ function getOutputMime() {
     if (uploadInfo && uploadInfo.isAnimated && uploadInfo.gifFrames) return 'image/gif';
     if (uploadInfo && uploadInfo.mime) {
         if (uploadInfo.mime === 'image/jpg' || uploadInfo.mime === 'image/jpeg') return 'image/jpeg';
+        if (uploadInfo.mime === 'image/apng') return 'image/png';
         if (uploadInfo.mime === 'image/png') return 'image/png';
         if (uploadInfo.mime === 'image/webp') return 'image/webp';
         if (uploadInfo.mime === 'image/bmp') return 'image/bmp';
@@ -2371,10 +2378,11 @@ async function handleImageUpload(e) {
 
     stopGifPreview();
 
+    const guessed = guessMimeFromName(file.name);
     uploadInfo = {
-        mime: file.type || guessMimeFromName(file.name) || null,
+        mime: file.type || guessed || null,
         name: file.name || null,
-        isGif: (file.type === 'image/gif') || (guessMimeFromName(file.name) === 'image/gif'),
+        isGif: (file.type === 'image/gif') || (guessed === 'image/gif'),
         isAnimated: false,
         animatedType: null,
         gifFrames: null,
@@ -2402,7 +2410,12 @@ async function handleImageUpload(e) {
             uploadInfo.gifFrames = null;
             uploadInfo.gifFullFrames = null;
         }
-    } else if ((file.type === 'image/png') || (guessMimeFromName(file.name) === 'image/png')) {
+    } else if (
+        (file.type === 'image/png') ||
+        (file.type === 'image/apng') ||
+        (guessed === 'image/png') ||
+        (guessed === 'image/apng')
+    ) {
         try {
             const buffer = await file.arrayBuffer();
             const parsed = await parseAnimatedPngFromBuffer(buffer);
