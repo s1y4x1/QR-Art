@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>艺术二维码生成器 (QR Art)</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="qrcode-lib.js"></script>
+    <script src="vendor/gifuct.min.js"></script>
+    <script src="vendor/gif.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <aside class="sidebar">
+            <h1>QR Art 🎨</h1>
+            
+            <div class="control-group">
+                <label>文本内容:</label>
+                <textarea id="text-input" rows="3">Hello World</textarea>
+                <label class="inline-check">
+                    <input type="checkbox" id="append-hash" checked>
+                    末尾添加"#"
+                </label>
+            </div>
+
+            <div class="control-group">
+                <label>编码格式:</label>
+                <select id="encoding-mode">
+                    <option value="Byte" selected>Byte (UTF-8/Binary)</option>
+                    <option value="Alphanumeric">Alphanumeric (仅大写字母数字)</option>
+                    <option value="Numeric">Numeric (仅数字)</option>
+                </select>
+            </div>
+
+            <div class="control-group hz-layout">
+                <label>容错率 (ECC):</label>
+                <select id="ecc-level">
+                    <option value="L" selected>L (7%)</option>
+                    <option value="M">M (15%)</option>
+                    <option value="Q">Q (25%)</option>
+                    <option value="H">H (30%)</option>
+                </select>
+            </div>
+
+            <div class="control-group full-width" style="margin-top: 5px;">
+                <label style="display:flex; align-items:center;">
+                    <input type="checkbox" id="artistic-mode" style="width: auto; margin-right: 8px;"> 
+                    利用容错 (强制填充背景)
+                </label>
+            </div>
+
+            <div class="control-group hz-layout">
+                <label>版本 (大小):</label>
+                <!-- Allow 0 for Auto -->
+                <div style="display:flex; align-items:center; gap:5px; flex:1;">
+                    <input type="range" id="version-range" min="0" max="40" value="0" step="1" style="flex:1;">
+                    <input type="number" id="version-input" value="0" min="0" max="40" style="width: 50px;">
+                </div>
+            </div>
+
+            <div class="control-group hz-layout">
+                <label>模块尺寸 (Px):</label>
+                <div class="cell-size-control">
+                    <input type="number" id="cell-size-input" value="8" min="0.1" max="50" step="0.1" style="width: 60px;">
+                    <button id="cell-size-auto-btn" type="button" class="mask-btn" style="display: none;">自动（图片原大小）</button>
+                </div>
+            </div>
+
+            <div class="control-group hz-layout">
+                <label>前景色:</label>
+                <div class="color-control">
+                    <input type="color" id="fg-color" value="#000000">
+                    <input type="text" id="fg-color-hex" value="000000" maxlength="6" placeholder="000000">
+                </div>
+            </div>
+
+            <div class="control-group hz-layout">
+                <label>背景色:</label>
+                <div class="color-control">
+                    <input type="color" id="bg-color" value="#ffffff">
+                    <input type="text" id="bg-color-hex" value="ffffff" maxlength="6" placeholder="ffffff">
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>掩码模式 (Mask):</label>
+                <div class="mask-controls">
+                    <button class="mask-btn mask-auto" id="mask-auto-btn" data-mask="-1" type="button">自动（当前：0）</button>
+                    <button class="mask-btn" data-mask="-2" type="button">无（展示掩码前）</button>
+                </div>
+            </div>
+
+            <div class="mask-gallery" id="mask-gallery">
+                <div class="mask-items">
+                    <button class="mask-item mask-btn" data-mask="0" type="button"><canvas data-mask="0" width="64" height="64"></canvas><div class="mask-formula">0:(i+j)%2=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="1" type="button"><canvas data-mask="1" width="64" height="64"></canvas><div class="mask-formula">1:i%2=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="2" type="button"><canvas data-mask="2" width="64" height="64"></canvas><div class="mask-formula">2:j%3=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="3" type="button"><canvas data-mask="3" width="64" height="64"></canvas><div class="mask-formula">3:(i+j)%3=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="4" type="button"><canvas data-mask="4" width="64" height="64"></canvas><div class="mask-formula">4:(⌊i/2⌋+⌊j/3⌋)%2=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="5" type="button"><canvas data-mask="5" width="64" height="64"></canvas><div class="mask-formula">5:(i*j)%2+(i*j)%3=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="6" type="button"><canvas data-mask="6" width="64" height="64"></canvas><div class="mask-formula">6:((i*j)%2+(i*j)%3)%2=0</div></button>
+                    <button class="mask-item mask-btn" data-mask="7" type="button"><canvas data-mask="7" width="64" height="64"></canvas><div class="mask-formula">7:((i*j)%3+(i+j)%2)%2=0</div></button>
+                </div>
+            </div>
+
+            <div class="control-group" style="border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="embed-image-cb">
+                    <span>保留图片背景</span>
+                </label>
+                <p class="hint">勾选后，图片将作为背景，二维码模块将变为半透明微缩方块以露出图片。</p>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-top: 6px;">
+                    <input type="checkbox" id="dynamic-preview-cb" disabled>
+                    <span>动态预览</span>
+                </label>
+            </div>
+
+            <div class="control-group">
+                <h3>高级作画</h3>
+                <p class="hint">左键绘制，右键擦除。</p>
+                <div class="tools">
+                    <button id="tool-pen" class="tool-btn active" title="画笔 (左键黑/右键白)">🖊️</button>
+                    <button id="import-btn" class="tool-btn" title="上传图片 (自动像素化)">📷</button>
+                    <button id="clear-draw" class="tool-btn" title="清空绘制">🗑️</button>
+                    <button id="whiten-btn" class="tool-btn" title="一键美白 (填充区变白)">✨</button>
+                    <button id="download-btn" class="tool-btn" title="下载图片">💾</button>
+                </div>
+                <input type="file" id="img-upload" accept="image/*" style="display: none">
+            </div>
+        </aside>
+        <div class="splitter" id="sidebar-splitter" role="separator" aria-label="调整面板大小"></div>
+        <main class="preview-area">
+            <div class="canvas-wrapper">
+                <canvas id="qr-canvas"></canvas>
+                <div id="import-overlay" style="display: none; position: absolute; border: 2px dashed #00f; z-index: 10;">
+                    <img id="preview-img" style="width: 100%; height: 100%; display: block; opacity: 0.7; pointer-events: none;">
+                    
+                    <!-- Resize Handles -->
+                    <div class="resize-handle n" data-handle="n"></div>
+                    <div class="resize-handle w" data-handle="w"></div>
+                    <div class="resize-handle e" data-handle="e"></div>
+                    <div class="resize-handle s" data-handle="s"></div>
+                    <div class="resize-handle nw" data-handle="nw"></div>
+                    <div class="resize-handle ne" data-handle="ne"></div>
+                    <div class="resize-handle sw" data-handle="sw"></div>
+                    <div class="resize-handle se" data-handle="se"></div>
+
+                    <div class="import-controls" style="position: absolute; top: -40px; right: 0; display: none; gap: 5px; background: rgba(255,255,255,0.9); padding: 5px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">
+                        <button id="import-ok" style="background: #2ecc71; color: white; border: none; padding: 5px 10px; cursor: pointer;">✅ 应用</button>
+                        <button id="import-cancel" style="background: #e74c3c; color: white; border: none; padding: 5px 10px; cursor: pointer;">❌ 取消</button>
+                    </div>
+                </div>
+            </div>
+            <div class="legend">
+                <div class="legend-item"><span class="dot" style="background: rgba(128, 128, 128, 0.5)"></span> 定位区</div>
+                <div class="legend-item"><span class="dot" style="background: rgba(255, 235, 59, 0.5)"></span> 数据保护区 (Text)</div>
+                <div class="legend-item"><span class="dot" style="background: rgba(0, 0, 255, 0.3)"></span> 纠错码区 (EC)</div>
+                <div class="legend-item"><span class="dot" style="border: 1px dashed #ccc; background: transparent;"></span> 自由绘制区 (Suffix)</div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

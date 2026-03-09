@@ -1,4 +1,4 @@
-// Global State
+﻿// Global State
 let userText = document.getElementById('text-input').value;
 let eccLevel = document.getElementById('ecc-level').value;
 let version = parseInt(document.getElementById('version-range').value) || 0;
@@ -166,7 +166,7 @@ function updateAutoCellSizeButtonLabel() {
     if (!importState.active || !hasImageUpload) return;
     const candidate = getAutoCellSizeCandidate();
     if (!candidate) return;
-    cellSizeAutoBtn.textContent = `自动（约${candidate.toFixed(1)}）`;
+    cellSizeAutoBtn.textContent = `鑷姩锛堢害${candidate.toFixed(1)}锛塦;
 }
 
 function setStaticGifPreview() {
@@ -434,7 +434,7 @@ function init() {
         const vInput = document.getElementById('version-input');
         if(vInput && vInput.value != version) vInput.value = version;
 
-        // verDisplay.textContent = version === 0 ? "自动" : version; // Removed span
+        // verDisplay.textContent = version === 0 ? "鑷姩" : version; // Removed span
         resetSuffix();
         updateQR();
     });
@@ -520,11 +520,11 @@ function init() {
         if (lastWhitenMode === 'white') {
              targetColor = 1; // Black
              lastWhitenMode = 'black';
-             whitenBtn.title = "再次点击一键全白"; 
+             whitenBtn.title = "鍐嶆鐐瑰嚮涓€閿叏鐧?; 
         } else {
              targetColor = 0; // White
              lastWhitenMode = 'white';
-             whitenBtn.title = "再次点击一键全黑"; 
+             whitenBtn.title = "鍐嶆鐐瑰嚮涓€閿叏榛?; 
         }
 
         // Fix logic stability:
@@ -768,7 +768,7 @@ function canUseAutoMask() {
 
 function updateMaskControls() {
     if (maskAutoBtn) {
-        maskAutoBtn.textContent = `自动（当前：${bestAutoMask}）`;
+        maskAutoBtn.textContent = `鑷姩锛堝綋鍓嶏細${bestAutoMask}锛塦;
         maskAutoBtn.style.display = canUseAutoMask() ? 'inline-flex' : 'none';
         maskAutoBtn.classList.toggle('active', maskPattern === -1);
     }
@@ -798,7 +798,7 @@ function applyOriginalImageSize() {
     CELL_SIZE = targetSize;
     const cellSizeInput = document.getElementById('cell-size-input');
     if (cellSizeInput) cellSizeInput.value = targetSize.toFixed(1);
-    if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `自动（约${targetSize.toFixed(1)}）`;
+    if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `鑷姩锛堢害${targetSize.toFixed(1)}锛塦;
 
     importState.width = importState.width * ratio;
     importState.height = importState.height * ratio;
@@ -1710,11 +1710,24 @@ function renderQR(isExport, imageOverride) {
             let covered = false;
             
             if (hasImage && embedImage) {
-                 const modCX = x + CELL_SIZE/2;
-                 const modCY = y + CELL_SIZE/2;
+                 const modCX = x + CELL_SIZE / 2;
+                 const modCY = y + CELL_SIZE / 2;
 
-                 if (modCX >= imgDrawX && modCX <= imgDrawX + imgDrawW &&
-                     modCY >= imgDrawY && modCY <= imgDrawY + imgDrawH) {
+                 // Fix: use rectangle overlap instead of center-point containment.
+                 // This prevents modules that are mostly covered (but center just outside)
+                 // from being rendered as full opaque modules.
+                 const eps = 0.5;
+                 const modLeft = x;
+                 const modTop = y;
+                 const modRight = x + CELL_SIZE;
+                 const modBottom = y + CELL_SIZE;
+                 const imgLeft = imgDrawX;
+                 const imgTop = imgDrawY;
+                 const imgRight = imgDrawX + imgDrawW;
+                 const imgBottom = imgDrawY + imgDrawH;
+
+                 if (modRight > imgLeft + eps && modLeft < imgRight - eps &&
+                     modBottom > imgTop + eps && modTop < imgBottom - eps) {
                      covered = true;
                  }
 
@@ -1778,10 +1791,13 @@ function renderQR(isExport, imageOverride) {
                     lum = (0.299*rr + 0.587*gg + 0.114*bb) / 255.0;
                 }
                 
-                // Special handling for Transparent areas: Display original module as small square
+                // Transparent covered area should still use small ghost module
                  if (isTransparent) {
-                     ctx.fillStyle = isDark ? fgColor : bgColor;
-                     ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+                     const ghostAlpha = 0.85;
+                     ctx.fillStyle = isDark
+                        ? rgbaFromHex(fgColor, ghostAlpha)
+                        : rgbaFromHex(bgColor, ghostAlpha);
+                     ctx.fillRect(x + offset, y + offset, smallSize, smallSize);
                  } else {
                     let alpha = 0.3; // fallback default
                     let shouldDraw = false;
@@ -1833,7 +1849,7 @@ function renderQR(isExport, imageOverride) {
             // Requirement said "Save should include image".
             // Typically "Visuals" (Yellow/Blue/Gray pads) are for Editor mode.
             // If Embed Image is checked, we probably still want to see Editor guides unless exporting?
-            // "不被选中，则一切照旧" implies old behavior.
+            // "涓嶈閫変腑锛屽垯涓€鍒囩収鏃? implies old behavior.
             // If checked... maybe guides are distracting?
             // Let's hide guides if exporting, keep them if editing, even in Embed mode (maybe with low opacity).
             
@@ -2236,10 +2252,10 @@ async function copyToClipboard() {
             const item = new ClipboardItem({ [mime]: blob });
             await navigator.clipboard.write([item]);
         }
-        alert('已复制到剪贴板');
+        alert('宸插鍒跺埌鍓创鏉?);
     } catch (e) {
         console.error(e);
-        alert('复制失败');
+        alert('澶嶅埗澶辫触');
     }
 }
 
@@ -2278,7 +2294,7 @@ async function exportAndDownload() {
         setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     } catch (e) {
         console.error(e);
-        alert('保存失败');
+        alert('淇濆瓨澶辫触');
     }
 }
 
@@ -2406,7 +2422,7 @@ async function handleImageUpload(e) {
                 uploadInfo.animatedType = 'gif';
             }
         } catch (err) {
-            console.warn('GIF解析失败:', err);
+            console.warn('GIF瑙ｆ瀽澶辫触:', err);
             uploadInfo.gifFrames = null;
             uploadInfo.gifFullFrames = null;
         }
