@@ -166,7 +166,7 @@ function updateAutoCellSizeButtonLabel() {
     if (!importState.active || !hasImageUpload) return;
     const candidate = getAutoCellSizeCandidate();
     if (!candidate) return;
-    cellSizeAutoBtn.textContent = `鑷姩锛堢害${candidate.toFixed(1)}锛塦;
+    cellSizeAutoBtn.textContent = `自动（约${candidate.toFixed(1)}）`;
 }
 
 function setStaticGifPreview() {
@@ -261,8 +261,7 @@ let payloadStartBit = 0; // Header + UserText + '#'
 // DOM Elements
 const canvas = document.getElementById('qr-canvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
-const canvasWrapper = document.querySelector('.canvas-wrapper'); // Add Wrapper
-// Ensure wrapper has relative positioning for overlay
+const canvasWrapper = document.querySelector('.canvas-wrapper');
 canvasWrapper.style.position = 'relative';
 
 const fileInput = document.getElementById('img-upload');
@@ -271,8 +270,6 @@ const importBtn = document.getElementById('import-btn');
 // Overlay Elements
 const importOverlay = document.getElementById('import-overlay');
 const previewImg = document.getElementById('preview-img');
-// const btnImportOk = document.getElementById('import-ok'); // Removed
-// const btnImportCancel = document.getElementById('import-cancel'); // Removed
 
 let importState = {
     active: false,
@@ -306,7 +303,6 @@ const appendHashCb = document.getElementById('append-hash');
 const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
-// const toolEraser = document.getElementById('tool-eraser'); // Removed
 
 let CELL_SIZE = 8;
 let qrMargin = 1;
@@ -520,11 +516,11 @@ function init() {
         if (lastWhitenMode === 'white') {
              targetColor = 1; // Black
              lastWhitenMode = 'black';
-             whitenBtn.title = "鍐嶆鐐瑰嚮涓€閿叏鐧?; 
+               whitenBtn.title = "再次点击一键全白";
         } else {
              targetColor = 0; // White
              lastWhitenMode = 'white';
-             whitenBtn.title = "鍐嶆鐐瑰嚮涓€閿叏榛?; 
+               whitenBtn.title = "再次点击一键全黑";
         }
 
         // Fix logic stability:
@@ -561,17 +557,12 @@ function init() {
 
     importBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', handleImageUpload);
-    
-    // Import Controls removed per user request
-    // Buttons are removed from HTML via UI hiding but listeners were here.
-    // Removed btnImportOk/Cancel listeners.
 
     // Import Interaction
     importOverlay.addEventListener('mousedown', startImportDrag);
     // Move and Up are global (in case mouse leaves overlay)
     document.addEventListener('mousemove', moveImportDrag);
     document.addEventListener('mouseup', endImportDrag);
-    // importOverlay.addEventListener('wheel', scaleImportImg, { passive: false }); // Disabled by user request
 
     canvas.addEventListener('mousedown', startDraw);
     canvas.addEventListener('mousemove', (e) => {
@@ -768,7 +759,7 @@ function canUseAutoMask() {
 
 function updateMaskControls() {
     if (maskAutoBtn) {
-        maskAutoBtn.textContent = `鑷姩锛堝綋鍓嶏細${bestAutoMask}锛塦;
+        maskAutoBtn.textContent = `自动（当前：${bestAutoMask}）`;
         maskAutoBtn.style.display = canUseAutoMask() ? 'inline-flex' : 'none';
         maskAutoBtn.classList.toggle('active', maskPattern === -1);
     }
@@ -798,7 +789,7 @@ function applyOriginalImageSize() {
     CELL_SIZE = targetSize;
     const cellSizeInput = document.getElementById('cell-size-input');
     if (cellSizeInput) cellSizeInput.value = targetSize.toFixed(1);
-    if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `鑷姩锛堢害${targetSize.toFixed(1)}锛塦;
+    if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `自动（约${targetSize.toFixed(1)}）`;
 
     importState.width = importState.width * ratio;
     importState.height = importState.height * ratio;
@@ -1843,16 +1834,6 @@ function renderQR(isExport, imageOverride) {
                                 ctx.fillStyle = isDark ? fgColor : bgColor;
                 ctx.fillRect(x,y, CELL_SIZE, CELL_SIZE);
             }
-            // ... (Visuals logic unchanged)
-            
-            // Visuals (Overlay) - Skip if isExport is true OR if embedImage is active (cleaner look?)
-            // Requirement said "Save should include image".
-            // Typically "Visuals" (Yellow/Blue/Gray pads) are for Editor mode.
-            // If Embed Image is checked, we probably still want to see Editor guides unless exporting?
-            // "涓嶈閫変腑锛屽垯涓€鍒囩収鏃? implies old behavior.
-            // If checked... maybe guides are distracting?
-            // Let's hide guides if exporting, keep them if editing, even in Embed mode (maybe with low opacity).
-            
             if (!isExport && cell) {
                 if (cell.type === 'func') {
                      ctx.fillStyle = 'rgba(128, 128, 128, 0.4)'; 
@@ -2252,10 +2233,10 @@ async function copyToClipboard() {
             const item = new ClipboardItem({ [mime]: blob });
             await navigator.clipboard.write([item]);
         }
-        alert('宸插鍒跺埌鍓创鏉?);
+        alert('已复制到剪贴板');
     } catch (e) {
         console.error(e);
-        alert('澶嶅埗澶辫触');
+        alert('复制失败');
     }
 }
 
@@ -2294,7 +2275,7 @@ async function exportAndDownload() {
         setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     } catch (e) {
         console.error(e);
-        alert('淇濆瓨澶辫触');
+        alert('保存失败');
     }
 }
 
@@ -2422,7 +2403,7 @@ async function handleImageUpload(e) {
                 uploadInfo.animatedType = 'gif';
             }
         } catch (err) {
-            console.warn('GIF瑙ｆ瀽澶辫触:', err);
+            console.warn('GIF解析失败:', err);
             uploadInfo.gifFrames = null;
             uploadInfo.gifFullFrames = null;
         }
@@ -2479,8 +2460,6 @@ async function handleImageUpload(e) {
         applyImport(false); 
         saveHistory(); 
         previewImg.onload = null;
-
-        // Intermediate results panel removed per request.
     };
     let objectUrl = null;
     if (!uploadInfo.isAnimated || !uploadInfo.gifFrames) {
@@ -2496,15 +2475,8 @@ function startImportMode(natW, natH) {
     importState.active = true;
     updateOverlayVisibility();
     
-    // Initial Size: Fit to 50% of canvas or natural size, centered
-    const canvasRect = canvas.getBoundingClientRect(); // Current visual size
-    const wrapperRect = canvasWrapper.getBoundingClientRect(); // Wrapper viewport
-    
-    // We want to position relative to the Wrapper content area.
-    // Actually, `canvas` is inside wrapper and might be scrolled.
-    // The overlay is inside wrapper, so it moves with scroll.
-    // We need to set left/top relative to wrapper's top-left corner (0,0 of scrollable area).
-    // Initial pos: Center of current visible view.
+    const canvasRect = canvas.getBoundingClientRect();
+    const wrapperRect = canvasWrapper.getBoundingClientRect();
     
     const viewW = wrapperRect.width;
     const viewH = wrapperRect.height;
