@@ -140,6 +140,14 @@ function stopGifPreview() {
 }
 
 function getAutoCellSizeCandidate() {
+    if (isImageBasisMode()) {
+        if (!generatedQR || !previewImg) return null;
+        const imgW = previewImg.naturalWidth || previewImg.width || 0;
+        if (imgW <= 0) return null;
+        const modules = generatedQR.getModuleCount() + 2 * qrMargin;
+        if (modules <= 0) return null;
+        return Math.max(0.1, Math.round((imgW / modules) * 10) / 10);
+    }
     if (!importState.active || !previewImg) return null;
     const imgW = previewImg.naturalWidth || previewImg.width || 0;
     const imgH = previewImg.naturalHeight || previewImg.height || 0;
@@ -261,6 +269,7 @@ let payloadStartBit = 0; // Header + UserText + '#'
 // DOM Elements
 const canvas = document.getElementById('qr-canvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const previewArea = document.querySelector('.preview-area');
 const canvasWrapper = document.querySelector('.canvas-wrapper');
 canvasWrapper.style.position = 'relative';
 
@@ -270,6 +279,7 @@ const importBtn = document.getElementById('import-btn');
 // Overlay Elements
 const importOverlay = document.getElementById('import-overlay');
 const previewImg = document.getElementById('preview-img');
+const deleteHintLayer = document.getElementById('delete-hint-layer');
 
 let importState = {
     active: false,
@@ -281,7 +291,11 @@ let importState = {
     relY: 0, // Relative to canvas.offsetTop
     isDragging: false,
     lastX: 0,
-    lastY: 0
+    lastY: 0,
+    lastMoveDx: 0,
+    lastMoveDy: 0,
+    dragGrabOffsetX: 0,
+    dragGrabOffsetY: 0
 };
 
 const textInput = document.getElementById('text-input');
@@ -303,9 +317,179 @@ const appendHashCb = document.getElementById('append-hash');
 const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
+const imageBasisCb = document.getElementById('image-basis-cb');
 
 let CELL_SIZE = 8;
 let qrMargin = 1;
+
+function isImageBasisMode() {
+    return !!(imageBasisCb && !imageBasisCb.disabled && imageBasisCb.checked && hasImageUpload);
+}
+
+function getSourceDimensions(imageSource = previewImg) {
+    if (!imageSource) return { width: 0, height: 0 };
+    return {
+        width: imageSource.naturalWidth || imageSource.width || 0,
+        height: imageSource.naturalHeight || imageSource.height || 0
+    };
+}
+
+function getOverlayInnerBoxInternal(canvasW, canvasH, displayW, displayH) {
+    const offsets = getCanvasContentOffsets();
+    const relX = importState.relX || 0;
+    const relY = importState.relY || 0;
+    const ovStyle = window.getComputedStyle(importOverlay);
+    const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
+    const ovBorderRight = parseFloat(ovStyle.borderRightWidth) || 0;
+    const ovBorderTop = parseFloat(ovStyle.borderTopWidth) || 0;
+    const ovBorderBottom = parseFloat(ovStyle.borderBottomWidth) || 0;
+    const ratioX = displayW > 0 ? (canvasW / displayW) : 1;
+    const ratioY = displayH > 0 ? (canvasH / displayH) : 1;
+
+    return {
+        x: (relX - offsets.left + ovBorderLeft) * ratioX,
+        y: (relY - offsets.top + ovBorderTop) * ratioY,
+        width: Math.max(0, (importState.width - ovBorderLeft - ovBorderRight) * ratioX),
+        height: Math.max(0, (importState.height - ovBorderTop - ovBorderBottom) * ratioY)
+    };
+}
+
+function initImportOverlayByMode(natW, natH) {
+    const wrapperRect = canvasWrapper.getBoundingClientRect();
+    const viewW = wrapperRect.width;
+    const viewH = wrapperRect.height;
+
+    if (isImageBasisMode()) {
+        const displayW = parseFloat(canvas.style.width) || canvas.width || viewW;
+        const displayH = parseFloat(canvas.style.height) || canvas.height || viewH;
+        const base = Math.min(displayW, displayH) * 0.6;
+        importState.width = Math.max(20, base);
+        importState.height = Math.max(20, base);
+        importState.x = canvas.offsetLeft + (displayW - importState.width) / 2;
+        importState.y = canvas.offsetTop + (displayH - importState.height) / 2;
+    } else {
+        const aspect = natW / natH;
+        let initW = viewW * 0.5;
+        let initH = initW / aspect;
+        importState.width = initW;
+        importState.height = initH;
+        importState.x = canvasWrapper.scrollLeft + (viewW - initW) / 2;
+        importState.y = canvasWrapper.scrollTop + (viewH - initH) / 2;
+    }
+
+    importState.relX = importState.x - canvas.offsetLeft;
+    importState.relY = importState.y - canvas.offsetTop;
+}
+
+function setDeleteZoneRect(node, show, left, top, width, height) {
+    if (!node) return;
+    node.style.display = show ? 'flex' : 'none';
+    if (!show) return;
+    node.style.left = `${Math.max(0, left)}px`;
+    node.style.top = `${Math.max(0, top)}px`;
+    node.style.width = `${Math.max(0, width)}px`;
+    node.style.height = `${Math.max(0, height)}px`;
+}
+
+function updateDeleteZones(activeSides = { left: false, right: false, top: false, bottom: false }, bounds = null) {
+    if (!deleteHintLayer) return;
+    const zones = {
+        left: deleteHintLayer.querySelector('.delete-hint-left'),
+        right: deleteHintLayer.querySelector('.delete-hint-right'),
+        top: deleteHintLayer.querySelector('.delete-hint-top'),
+        bottom: deleteHintLayer.querySelector('.delete-hint-bottom')
+    };
+    if (!zones.left || !zones.right || !zones.top || !zones.bottom) return;
+
+    const areaRect = previewArea ? previewArea.getBoundingClientRect() : canvasWrapper.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const aw = areaRect.width;
+    const ah = areaRect.height;
+    const canvasLeft = canvasRect.left - areaRect.left;
+    const canvasTop = canvasRect.top - areaRect.top;
+    const canvasRight = canvasLeft + canvasRect.width;
+    const canvasBottom = canvasTop + canvasRect.height;
+
+    const leftBound = bounds && Number.isFinite(bounds.left) ? bounds.left : canvasLeft;
+    const rightBound = bounds && Number.isFinite(bounds.right) ? bounds.right : canvasRight;
+    const topBound = bounds && Number.isFinite(bounds.top) ? bounds.top : canvasTop;
+    const bottomBound = bounds && Number.isFinite(bounds.bottom) ? bounds.bottom : canvasBottom;
+
+    const leftW = Math.max(0, Math.min(aw, leftBound));
+    const rightX = Math.max(0, Math.min(aw, rightBound));
+    const topH = Math.max(0, Math.min(ah, topBound));
+    const bottomY = Math.max(0, Math.min(ah, bottomBound));
+
+    setDeleteZoneRect(zones.left, !!activeSides.left && leftW > 0, 0, 0, leftW, ah);
+    setDeleteZoneRect(zones.right, !!activeSides.right && rightX < aw, rightX, 0, aw - rightX, ah);
+    setDeleteZoneRect(zones.top, !!activeSides.top && topH > 0, 0, 0, aw, topH);
+    setDeleteZoneRect(zones.bottom, !!activeSides.bottom && bottomY < ah, 0, bottomY, aw, ah - bottomY);
+}
+
+function areAdjacentSides(a, b) {
+    const pair = `${a}|${b}`;
+    return pair === 'left|top' || pair === 'top|left' ||
+        pair === 'top|right' || pair === 'right|top' ||
+        pair === 'right|bottom' || pair === 'bottom|right' ||
+        pair === 'bottom|left' || pair === 'left|bottom';
+}
+
+function getPointerDeleteBounds() {
+    const areaRect = previewArea ? previewArea.getBoundingClientRect() : canvasWrapper.getBoundingClientRect();
+    const qrRect = getQrRect();
+    const w = importState.width;
+    const h = importState.height;
+    const gx = importState.dragGrabOffsetX;
+    const gy = importState.dragGrabOffsetY;
+
+    const leftClient = qrRect.left - (w - gx);
+    const rightClient = qrRect.right + gx;
+    const topClient = qrRect.top - (h - gy);
+    const bottomClient = qrRect.bottom + gy;
+
+    return {
+        left: leftClient - areaRect.left,
+        right: rightClient - areaRect.left,
+        top: topClient - areaRect.top,
+        bottom: bottomClient - areaRect.top
+    };
+}
+
+function getExceededSidesByDistance(imgRect, qrRect) {
+    const dist = {
+        left: Math.max(0, qrRect.left - imgRect.left),
+        right: Math.max(0, imgRect.right - qrRect.right),
+        top: Math.max(0, qrRect.top - imgRect.top),
+        bottom: Math.max(0, imgRect.bottom - qrRect.bottom)
+    };
+
+    const positive = Object.entries(dist)
+        .filter(([, v]) => v > 0)
+        .sort((a, b) => b[1] - a[1]);
+
+    const sides = { left: false, right: false, top: false, bottom: false };
+    if (positive.length === 0) return { sides, dist, hasExceed: false };
+
+    const [firstSide] = positive[0];
+    sides[firstSide] = true;
+
+    if (positive.length >= 2) {
+        const [secondSide] = positive[1];
+        if (areAdjacentSides(firstSide, secondSide)) {
+            sides[secondSide] = true;
+        }
+    }
+
+    return { sides, dist, hasExceed: true };
+}
+
+function clearDeleteZones() {
+    if (!deleteHintLayer) return;
+    ['.delete-hint-left', '.delete-hint-right', '.delete-hint-top', '.delete-hint-bottom'].forEach((sel) => {
+        const node = deleteHintLayer.querySelector(sel);
+        if (node) node.style.display = 'none';
+    });
+}
 
 function init() {
     // Determine initial version if auto
@@ -313,6 +497,24 @@ function init() {
 
     if (embedImageCb) {
         embedImageCb.disabled = true;
+    }
+
+    if (imageBasisCb) {
+        imageBasisCb.disabled = true;
+        imageBasisCb.checked = false;
+        imageBasisCb.addEventListener('change', () => {
+            if (!hasImageUpload) {
+                imageBasisCb.checked = false;
+                return;
+            }
+            renderQR(false);
+            if (importState.active && previewImg) {
+                initImportOverlayByMode(previewImg.naturalWidth || previewImg.width || 1, previewImg.naturalHeight || previewImg.height || 1);
+                updateOverlayTransform();
+                applyImport(false);
+            }
+            updateOverlayVisibility();
+        });
     }
 
     if (dynamicPreviewCb) {
@@ -485,6 +687,8 @@ function init() {
              importState.height = 0;
              importOverlay.style.display = 'none';
              importOverlay.classList.remove('import-outside');
+             importOverlay.classList.remove('image-basis');
+             clearDeleteZones();
              previewImg.removeAttribute('src'); // Clear src to stop renderQR from drawing
              fileInput.value = ''; 
              uploadInfo = { mime: null, name: null, isGif: false, isAnimated: false, animatedType: null, gifFrames: null, gifFullFrames: null, gifWidth: 0, gifHeight: 0, gifBuffer: null };
@@ -496,6 +700,10 @@ function init() {
              if (dynamicPreviewCb) {
                  dynamicPreviewCb.checked = false;
                  dynamicPreviewCb.disabled = true;
+             }
+             if (imageBasisCb) {
+                 imageBasisCb.checked = false;
+                 imageBasisCb.disabled = true;
              }
              if (cellSizeAutoBtn) {
                  cellSizeAutoBtn.style.display = 'none';
@@ -1549,96 +1757,96 @@ function drawGrid(suffixStr, type, mask, hasSeparator) {
 
 function renderQR(isExport, imageOverride) {
     if (!generatedQR) return;
-    
     const count = generatedQR.getModuleCount();
-    const sizePx = (count + 2 * qrMargin) * CELL_SIZE;
+    const baseSize = (count + 2 * qrMargin) * CELL_SIZE;
+    const imageSource = imageOverride || previewImg;
+    const srcDim = getSourceDimensions(imageSource);
+    const imageReady = srcDim.width > 0 && srcDim.height > 0;
+    const basisMode = isImageBasisMode();
 
-    canvas.width = sizePx;
-    canvas.height = sizePx;
-    
-    // Apply Zoom
-    const displaySize = Math.floor(sizePx * zoomLevel);
-    canvas.style.width = displaySize + 'px';
-    canvas.style.height = displaySize + 'px';
-    
-    canvas.style.transform = ''; 
-    canvas.style.imageRendering = "pixelated"; 
-    
+    let canvasW = baseSize;
+    let canvasH = baseSize;
+    if (basisMode && imageReady) {
+        canvasW = baseSize;
+        canvasH = Math.max(1, Math.round(baseSize * (srcDim.height / srcDim.width)));
+    }
+
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+
+    const displayW = Math.max(1, Math.floor(canvasW * zoomLevel));
+    const displayH = Math.max(1, Math.floor(canvasH * zoomLevel));
+    canvas.style.width = displayW + 'px';
+    canvas.style.height = displayH + 'px';
+    canvas.style.transform = '';
+    canvas.style.imageRendering = 'pixelated';
+    canvasWrapper.style.aspectRatio = `${canvasW} / ${canvasH}`;
+
     const fgColor = foregroundColor || '#000000';
     const bgColor = backgroundColor || '#ffffff';
-
-    // Always start with background color (fixes transparency issues on export)
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0,0, canvas.width, canvas.height);
-
-    // Background Image Mode
     const embedImage = document.getElementById('embed-image-cb') && document.getElementById('embed-image-cb').checked;
-    
-    
-    // Check "Artistic Mode" (Exploit EC)
     const artisticMode = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
-    
-    // PRE-CALCULATE IMAGE GEOMETRY & DATA
-    // We unify coordinates here to prevent discrepancy between "Artistic Override" and "Visual Ghosting"
+
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
     let imgDrawX = 0, imgDrawY = 0, imgDrawW = 0, imgDrawH = 0;
     let hasImage = false;
     let offData = null;
     let bgData = null;
 
-    const imageSource = imageOverride || previewImg;
-    const imageReady = imageSource && ((imageSource.naturalWidth || imageSource.width) > 0);
-
-    if (imageReady && importState.width > 0 && (embedImage || artisticMode)) {
+    if (imageReady && importState.width > 0 && (basisMode || embedImage || artisticMode)) {
         try {
             hasImage = true;
-            const ratio = sizePx / displaySize;
-            const offsets = getCanvasContentOffsets();
-            let relX = importState.relX;
-            let relY = importState.relY;
-             if (relX === 0 && relY === 0 && importState.x !== 0) {
-                 relX = importState.x - canvas.offsetLeft;
-                 relY = importState.y - canvas.offsetTop;
+            if (basisMode) {
+                imgDrawX = 0;
+                imgDrawY = 0;
+                imgDrawW = canvas.width;
+                imgDrawH = canvas.height;
+            } else {
+                const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+                imgDrawX = box.x;
+                imgDrawY = box.y;
+                imgDrawW = box.width;
+                imgDrawH = box.height;
             }
-            
-            // UNIFIED GEOMETRY: Align to overlay content box (exclude overlay border)
-            const ovStyle = window.getComputedStyle(importOverlay);
-            const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
-            const ovBorderRight = parseFloat(ovStyle.borderRightWidth) || 0;
-            const ovBorderTop = parseFloat(ovStyle.borderTopWidth) || 0;
-            const ovBorderBottom = parseFloat(ovStyle.borderBottomWidth) || 0;
-            const imgW = Math.max(0, importState.width - ovBorderLeft - ovBorderRight);
-            const imgH = Math.max(0, importState.height - ovBorderTop - ovBorderBottom);
-            imgDrawX = (relX - offsets.left + ovBorderLeft) * ratio;
-            imgDrawY = (relY - offsets.top + ovBorderTop) * ratio;
-            imgDrawW = imgW * ratio;
-            imgDrawH = imgH * ratio;
-            
-            // Prepare offscreen canvas (Official Reference for Image Data)
+
             const offCan = document.createElement('canvas');
             offCan.width = canvas.width;
             offCan.height = canvas.height;
             const offCtx = offCan.getContext('2d', { willReadFrequently: true });
-            offCtx.clearRect(0,0, offCan.width, offCan.height);
+            offCtx.clearRect(0, 0, offCan.width, offCan.height);
             offCtx.drawImage(imageSource, imgDrawX, imgDrawY, imgDrawW, imgDrawH);
             offData = offCtx.getImageData(0, 0, canvas.width, canvas.height).data;
-            
-            // Draw to Main Canvas (if needed)
-            const shouldDrawBg = isExport || !importState.active;
-              if (embedImage && shouldDrawBg) {
-                  ctx.drawImage(imageSource, imgDrawX, imgDrawY, imgDrawW, imgDrawH);
-                 bgData = ctx.getImageData(0, 0, canvas.width, canvas.height); 
-            } else {
-                 bgData = ctx.getImageData(0,0, canvas.width, canvas.height);
+
+            const shouldDrawBg = basisMode || (embedImage && (isExport || !importState.active));
+            if (shouldDrawBg) {
+                ctx.drawImage(imageSource, imgDrawX, imgDrawY, imgDrawW, imgDrawH);
             }
-        } catch(e) { console.error(e); }
-    } else {
-        // Just grab bgData for consistency if needed later? (Mostly white)
-        // Optimization: not strictly needed loop will fail gracefully
+            bgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        } catch (e) {
+            console.error(e);
+        }
     }
 
-    for(let r=0; r<count; r++) {
-        for(let c=0; c<count; c++) {
-            let isDark = generatedQR.isDark(r,c);
+    let qrOriginX = 0;
+    let qrOriginY = 0;
+    let qrW = (count + 2 * qrMargin) * CELL_SIZE;
+    let qrH = qrW;
+    if (basisMode && importState.active && importState.width > 0) {
+        const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+        qrOriginX = box.x;
+        qrOriginY = box.y;
+        qrW = Math.max(1, box.width);
+        qrH = Math.max(1, box.height);
+    }
+
+    const moduleW = qrW / (count + 2 * qrMargin);
+    const moduleH = qrH / (count + 2 * qrMargin);
+
+    for (let r = 0; r < count; r++) {
+        for (let c = 0; c < count; c++) {
+            let isDark = generatedQR.isDark(r, c);
             const cell = pixelMap[r] ? pixelMap[r][c] : null;
             const showUnmasked = (maskPattern === -2);
 
@@ -1646,207 +1854,142 @@ function renderQR(isExport, imageOverride) {
                 isDark = isDark ^ (cell.maskVal === 1);
             }
 
-            // --- Artistic Mode Override (Exploit Error Correction) ---
-            let artOverride = false;
-            
-            const isFormatInfo = (r, c) => {
-                // Fixed Dark Module
-                if (r === count - 8 && c === 8) return true;
-                // Vertical Strip under TL Finder
-                if (c === 8 && r < 9) return true;
-                if (c === 8 && r >= count - 8) return true;
-                // Horizontal Strip right of TL Finder
-                if (r === 8 && c < 9) return true;
-                if (r === 8 && c >= count - 8) return true;
+            const isFormatInfo = (rr, cc) => {
+                if (rr === count - 8 && cc === 8) return true;
+                if (cc === 8 && rr < 9) return true;
+                if (cc === 8 && rr >= count - 8) return true;
+                if (rr === 8 && cc < 9) return true;
+                if (rr === 8 && cc >= count - 8) return true;
                 return false;
             };
 
-            if (artisticMode && offData && cell && cell.type === 'ec') {
-                if (!isFormatInfo(r, c)) {
-                    // Sample Image
-                    const cx = Math.floor((c + qrMargin) * CELL_SIZE + (CELL_SIZE / 2));
-                    const cy = Math.floor((r + qrMargin) * CELL_SIZE + (CELL_SIZE / 2));
-                    // Note: offData is drawn at imgDrawX/Y. Sampling at absolute canvas cx,cy is correct.
-                    
-                    if (cx >=0 && cx < canvas.width && cy >=0 && cy < canvas.height) {
-                        const idx = (cy * canvas.width + cx) * 4;
-                        const aa = offData[idx+3] / 255.0;
-                        if (aa > 0) {
-                            const rr = offData[idx];
-                            const gg = offData[idx+1];
-                            const bb = offData[idx+2];
-                            const bg = parseHexColor(backgroundColor || '#ffffff');
-                            const rB = rr * aa + bg.r * (1 - aa);
-                            const gB = gg * aa + bg.g * (1 - aa);
-                            const bB = bb * aa + bg.b * (1 - aa);
-                            const lum = (0.299*rB + 0.587*gB + 0.114*bB);
-                            isDark = (lum < BINARIZE_THRESHOLD); 
-                            artOverride = true;
-                        }
+            const x = qrOriginX + (c + qrMargin) * moduleW;
+            const y = qrOriginY + (r + qrMargin) * moduleH;
+
+            if (artisticMode && offData && cell && cell.type === 'ec' && !isFormatInfo(r, c)) {
+                const cx = Math.floor(x + moduleW / 2);
+                const cy = Math.floor(y + moduleH / 2);
+                if (cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
+                    const idx = (cy * canvas.width + cx) * 4;
+                    const aa = offData[idx + 3] / 255.0;
+                    if (aa > 0) {
+                        const rr = offData[idx];
+                        const gg = offData[idx + 1];
+                        const bb = offData[idx + 2];
+                        const bg = parseHexColor(backgroundColor || '#ffffff');
+                        const rB = rr * aa + bg.r * (1 - aa);
+                        const gB = gg * aa + bg.g * (1 - aa);
+                        const bB = bb * aa + bg.b * (1 - aa);
+                        const lum = (0.299 * rB + 0.587 * gB + 0.114 * bB);
+                        isDark = (lum < BINARIZE_THRESHOLD);
                     }
                 }
             }
-            
-            // Check manual draw overrides (Pen works on top of Art Mode)
+
             if (drawnPixels.has(`${r},${c}`)) {
-                 const val = drawnPixels.get(`${r},${c}`);
-                 if (val === 1) isDark = true;
-                 if (val === 0) isDark = false; 
+                const val = drawnPixels.get(`${r},${c}`);
+                if (val === 1) isDark = true;
+                if (val === 0) isDark = false;
             }
 
-            const x = (c+qrMargin)*CELL_SIZE;
-            const y = (r+qrMargin)*CELL_SIZE;
-            
-            // Check coverage based on UNIFIED GEOMETRY
             let covered = false;
-            
-            if (hasImage && embedImage) {
-                 const modCX = x + CELL_SIZE / 2;
-                 const modCY = y + CELL_SIZE / 2;
+            if (!basisMode && hasImage && embedImage) {
+                const modLeft = x;
+                const modTop = y;
+                const modRight = x + moduleW;
+                const modBottom = y + moduleH;
+                const imgLeft = imgDrawX;
+                const imgTop = imgDrawY;
+                const imgRight = imgDrawX + imgDrawW;
+                const imgBottom = imgDrawY + imgDrawH;
+                const eps = 0.5;
 
-                 // Fix: use rectangle overlap instead of center-point containment.
-                 // This prevents modules that are mostly covered (but center just outside)
-                 // from being rendered as full opaque modules.
-                 const eps = 0.5;
-                 const modLeft = x;
-                 const modTop = y;
-                 const modRight = x + CELL_SIZE;
-                 const modBottom = y + CELL_SIZE;
-                 const imgLeft = imgDrawX;
-                 const imgTop = imgDrawY;
-                 const imgRight = imgDrawX + imgDrawW;
-                 const imgBottom = imgDrawY + imgDrawH;
+                if (modRight > imgLeft + eps && modLeft < imgRight - eps &&
+                    modBottom > imgTop + eps && modTop < imgBottom - eps) {
+                    covered = true;
+                }
 
-                 if (modRight > imgLeft + eps && modLeft < imgRight - eps &&
-                     modBottom > imgTop + eps && modTop < imgBottom - eps) {
-                     covered = true;
-                 }
-
-                 // ROBUST COVERAGE: If Binarization (Artistic Mode) saw this pixel as part of the image (Alpha > 10),
-                 // then MUST treat it as Covered (Ghost) to prevent "Large Black Squares" at the fringe.
-                 // This ensures 100% consistency between the Logic Pass (Bits) and Visual Pass (Ghosts).
-                 if (!covered && offData) {
-                    const cx = Math.floor(modCX);
-                    const cy = Math.floor(modCY);
+                if (!covered && offData) {
+                    const cx = Math.floor(x + moduleW / 2);
+                    const cy = Math.floor(y + moduleH / 2);
                     if (cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                         const idx = (cy * canvas.width + cx) * 4;
-                        if (offData[idx+3] > 10) {
-                             covered = true;
-                        }
+                        if (offData[idx + 3] > 10) covered = true;
                     }
-                 }
-            }
-            
-            let useGhost = false;
-            if (covered) {
-                // New Logic: If inside image area (covered), always use Ghost style.
-                // This applies to both Opaque and Transparent areas of the image.
-                // It ensures uniform look inside the image bounds.
-                if (cell && (cell.type === 'data' || cell.type === 'ec')) {
-                    useGhost = true;
                 }
             }
-            
+
+            const useGhost = ((basisMode && embedImage) || (!basisMode && covered)) && cell && (cell.type === 'data' || cell.type === 'ec');
             if (useGhost) {
-                // Modified rendering: Check luminance to decide whether to draw
-                const smallSize = CELL_SIZE / 2;
-                const offset = CELL_SIZE / 4;
-                
-                // Sample center pixel
-                const cx = Math.floor(x + CELL_SIZE/2);
-                const cy = Math.floor(y + CELL_SIZE/2);
-                
-                let lum = 0.5; // Default if OOB
+                const smallSize = Math.min(moduleW, moduleH) / 2;
+                const offsetX = (moduleW - smallSize) / 2;
+                const offsetY = (moduleH - smallSize) / 2;
+                const cx = Math.floor(x + moduleW / 2);
+                const cy = Math.floor(y + moduleH / 2);
+                let lum = 0.5;
                 let isTransparent = false;
 
-                // Priority: Use offData (Real Image) if available, as bgData might be white (if editing)
                 if (offData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                     const idx = (cy * canvas.width + cx) * 4;
-                    
-                    // Check transparency (Alpha < 10)
-                    if (offData[idx+3] <= 10) {
-                         isTransparent = true;
+                    if (offData[idx + 3] <= 10) {
+                        isTransparent = true;
                     } else {
                         const rr = offData[idx];
-                        const gg = offData[idx+1];
-                        const bb = offData[idx+2];
-                        lum = (0.299*rr + 0.587*gg + 0.114*bb) / 255.0;
+                        const gg = offData[idx + 1];
+                        const bb = offData[idx + 2];
+                        lum = (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255.0;
                     }
-                } else if (bgData && cx >=0 && cx < canvas.width && cy >=0 && cy < canvas.height) {
-                    // Fallback to bgData (Canvas). 
-                    // Note: Cannot reliable detect transparency from white bgData, so assume Opaque.
+                } else if (bgData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                     const idx = (cy * canvas.width + cx) * 4;
                     const rr = bgData.data[idx];
-                    const gg = bgData.data[idx+1];
-                    const bb = bgData.data[idx+2];
-                    lum = (0.299*rr + 0.587*gg + 0.114*bb) / 255.0;
+                    const gg = bgData.data[idx + 1];
+                    const bb = bgData.data[idx + 2];
+                    lum = (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255.0;
                 }
-                
-                // Transparent covered area should still use small ghost module
-                 if (isTransparent) {
-                     const ghostAlpha = 0.85;
-                     ctx.fillStyle = isDark
-                        ? rgbaFromHex(fgColor, ghostAlpha)
-                        : rgbaFromHex(bgColor, ghostAlpha);
-                     ctx.fillRect(x + offset, y + offset, smallSize, smallSize);
-                 } else {
-                    let alpha = 0.3; // fallback default
-                    let shouldDraw = false;
-                    
-                    if (isDark) {
 
-                    // Target: Dark (< 0.25)
-                    if (lum < 0.25) {
-                        shouldDraw = false;
-                    } else {
-                        shouldDraw = true;
-                        // Calculate alpha to reach 0.25
-                        // lum * (1 - a) = 0.25 => a = 1 - 0.25/lum
-                        alpha = 1 - (0.25 / lum);
-                        if (alpha < 0) alpha = 0; // Should be covered by if catch
-                    }
-                    if (shouldDraw) {
-                        alpha = Math.max(0, Math.min(1, alpha));
-                        ctx.fillStyle = rgbaFromHex(fgColor, alpha.toFixed(2));
-                        ctx.fillRect(x + offset, y + offset, smallSize, smallSize);
-                    }
+                if (isTransparent) {
+                    ctx.fillStyle = isDark ? rgbaFromHex(fgColor, 0.85) : rgbaFromHex(bgColor, 0.85);
+                    ctx.fillRect(x + offsetX, y + offsetY, smallSize, smallSize);
                 } else {
-                    // Target: Light (> 0.80)
-                    if (lum > 0.80) {
-                        shouldDraw = false;
+                    let alpha = 0.3;
+                    let shouldDraw = false;
+                    if (isDark) {
+                        if (lum >= 0.25) {
+                            shouldDraw = true;
+                            alpha = Math.max(0, Math.min(1, 1 - (0.25 / lum)));
+                        }
+                        if (shouldDraw) {
+                            ctx.fillStyle = rgbaFromHex(fgColor, alpha.toFixed(2));
+                            ctx.fillRect(x + offsetX, y + offsetY, smallSize, smallSize);
+                        }
                     } else {
-                        shouldDraw = true;
-                        // Calculate alpha to reach 0.80
-                        // lum * (1 - a) + a = 0.80 
-                        // a * (1 - lum) = 0.80 - lum
-                        // a = (0.80 - lum) / (1 - lum)
-                        if (lum >= 1) alpha = 1; // pure white needed if lum is 1 (impossible if we want light)
-                        else alpha = (0.80 - lum) / (1.0 - lum);
-                    }
-                    if (shouldDraw) {
-                        alpha = Math.max(0, Math.min(1, alpha));
-                                                ctx.fillStyle = rgbaFromHex(bgColor, alpha.toFixed(2));
-                        ctx.fillRect(x + offset, y + offset, smallSize, smallSize);
+                        if (lum <= 0.80) {
+                            shouldDraw = true;
+                            alpha = (lum >= 1) ? 1 : ((0.80 - lum) / (1.0 - lum));
+                            alpha = Math.max(0, Math.min(1, alpha));
+                        }
+                        if (shouldDraw) {
+                            ctx.fillStyle = rgbaFromHex(bgColor, alpha.toFixed(2));
+                            ctx.fillRect(x + offsetX, y + offsetY, smallSize, smallSize);
+                        }
                     }
                 }
-              }
             } else {
-                                ctx.fillStyle = isDark ? fgColor : bgColor;
-                ctx.fillRect(x,y, CELL_SIZE, CELL_SIZE);
+                ctx.fillStyle = isDark ? fgColor : bgColor;
+                ctx.fillRect(x, y, moduleW, moduleH);
             }
+
             if (!isExport && cell) {
                 if (cell.type === 'func') {
-                     ctx.fillStyle = 'rgba(128, 128, 128, 0.4)'; 
-                     ctx.fillRect(x,y, CELL_SIZE, CELL_SIZE);
+                    ctx.fillStyle = 'rgba(128, 128, 128, 0.4)';
+                    ctx.fillRect(x, y, moduleW, moduleH);
                 } else if (cell.type === 'ec') {
-                     ctx.fillStyle = 'rgba(0, 0, 255, 0.2)'; 
-                     ctx.fillRect(x,y, CELL_SIZE, CELL_SIZE);
-                } else if (cell.type === 'data') {
-                    if (cell.globalBitIndex < payloadStartBit) {
-                         ctx.fillStyle = 'rgba(255, 235, 59, 0.3)'; 
-                         ctx.fillRect(x,y, CELL_SIZE, CELL_SIZE);
-                    }
-                } 
+                    ctx.fillStyle = 'rgba(0, 0, 255, 0.2)';
+                    ctx.fillRect(x, y, moduleW, moduleH);
+                } else if (cell.type === 'data' && cell.globalBitIndex < payloadStartBit) {
+                    ctx.fillStyle = 'rgba(255, 235, 59, 0.3)';
+                    ctx.fillRect(x, y, moduleW, moduleH);
+                }
             }
         }
     }
@@ -2032,6 +2175,7 @@ function handleWheel(e) {
     
     // Current Dimensions
     const currentW = parseFloat(canvas.style.width) || canvas.width;
+    const currentH = parseFloat(canvas.style.height) || canvas.height;
     
     // Calculate cursor position Ratio relative to the Canvas Image
     const cLeft = canvas.offsetLeft;
@@ -2044,7 +2188,7 @@ function handleWheel(e) {
     const relY = absY - cTop;
     
     const rx = relX / currentW;
-    const ry = relY / currentW;
+    const ry = relY / currentH;
     
     // Apply Zoom
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
@@ -2082,10 +2226,11 @@ function handleWheel(e) {
     }
 
     // New Dimensions
-    const newSize = Math.floor(canvas.width * zoomLevel);
+    const newW = Math.floor(canvas.width * zoomLevel);
+    const newH = Math.floor(canvas.height * zoomLevel);
     
-    canvas.style.width = newSize + 'px';
-    canvas.style.height = newSize + 'px'; // Keep aspect ratio square
+    canvas.style.width = newW + 'px';
+    canvas.style.height = newH + 'px';
     
     // Adjust Scroll to keep Ratio
     // We want the point under the mouse (rx, ry) to remain under the mouse.
@@ -2100,8 +2245,8 @@ function handleWheel(e) {
     // Wait, if css changed to block/absolute, cLeft might change or stay 0.
     // Assuming cLeft stays relatively 0 (top-left aligned in scroll view):
     
-    canvasWrapper.scrollLeft = (newSize * rx) - mouseX + (cLeft * ratio); // Approximate cLeft scaling?
-    canvasWrapper.scrollTop = (newSize * ry) - mouseY + (cTop * ratio);
+    canvasWrapper.scrollLeft = (newW * rx) - mouseX + (cLeft * ratio);
+    canvasWrapper.scrollTop = (newH * ry) - mouseY + (cTop * ratio);
     
     // Correction: Standard Zoom-At-Cursor logic for scroll containers
     // Wrapper.scrollLeft += (mouseX + scrollLeft) * (rate - 1) ? No.
@@ -2112,15 +2257,15 @@ function handleWheel(e) {
     // Previous: canvasWrapper.scrollLeft = (newSize * rx) - mouseX;
     // This worked well when cLeft was negligible. With new centering layout, let's keep it but re-verify.
     // Actually let's just stick to the previous working one:
-    canvasWrapper.scrollLeft = (newSize * rx + cLeft) - mouseX; // Wait, previous didn't have +cLeft
+    canvasWrapper.scrollLeft = (newW * rx + cLeft) - mouseX;
     // Previous: (newSize * rx) - mouseX. 
     // (newSize * rx) is the new Pixel Position relative to Canvas Origin.
     // - mouseX shifts it so that pixel is at mouseX visual spot.
     // This assumes Canvas Origin is at (ScrollLeft + 0).
     // If Canvas has Margin, Canvas Origin is at (ScrollLeft + Margin).
     // So if we ignore Margin change, it's roughly correct.
-    canvasWrapper.scrollLeft = (newSize * rx) - mouseX;
-    canvasWrapper.scrollTop = (newSize * ry) - mouseY;
+    canvasWrapper.scrollLeft = (newW * rx) - mouseX;
+    canvasWrapper.scrollTop = (newH * ry) - mouseY;
 
     // Update Absolute X/Y based on new Pos
     if (importState.active || importState.width > 0) {
@@ -2230,8 +2375,14 @@ async function copyToClipboard() {
             }
         } else {
             const blob = await exportCurrentBlob(mime);
-            const item = new ClipboardItem({ [mime]: blob });
-            await navigator.clipboard.write([item]);
+            try {
+                const item = new ClipboardItem({ [mime]: blob });
+                await navigator.clipboard.write([item]);
+            } catch (err) {
+                if (lastCopiedAnimatedUrl) URL.revokeObjectURL(lastCopiedAnimatedUrl);
+                lastCopiedAnimatedUrl = URL.createObjectURL(blob);
+                await navigator.clipboard.writeText(lastCopiedAnimatedUrl);
+            }
         }
         alert('已复制到剪贴板');
     } catch (e) {
@@ -2452,6 +2603,10 @@ async function handleImageUpload(e) {
         if (cellSizeAutoBtn) {
             cellSizeAutoBtn.style.display = 'inline-flex';
         }
+        if (imageBasisCb) {
+            imageBasisCb.disabled = false;
+            imageBasisCb.checked = false;
+        }
 
         hasImageUpload = true;
         lockAutoMaskIfNeeded();
@@ -2473,28 +2628,8 @@ async function handleImageUpload(e) {
 
 function startImportMode(natW, natH) {
     importState.active = true;
+    initImportOverlayByMode(natW, natH);
     updateOverlayVisibility();
-    
-    const canvasRect = canvas.getBoundingClientRect();
-    const wrapperRect = canvasWrapper.getBoundingClientRect();
-    
-    const viewW = wrapperRect.width;
-    const viewH = wrapperRect.height;
-    
-    // Initial visual size for the image (try to match roughly 1/2 view)
-    const aspect = natW / natH;
-    let initW = viewW * 0.5;
-    let initH = initW / aspect;
-    
-    importState.width = initW;
-    importState.height = initH;
-    importState.x = canvasWrapper.scrollLeft + (viewW - initW) / 2;
-    importState.y = canvasWrapper.scrollTop + (viewH - initH) / 2;
-    
-    // Init Rel Pos
-    importState.relX = importState.x - canvas.offsetLeft;
-    importState.relY = importState.y - canvas.offsetTop;
-    
     updateOverlayTransform();
     
     // Force hide buttons (Requested by user)
@@ -2507,6 +2642,9 @@ function updateOverlayTransform() {
     importOverlay.style.height = importState.height + 'px';
     importOverlay.style.left = importState.x + 'px';
     importOverlay.style.top = importState.y + 'px';
+    const basis = isImageBasisMode();
+    importOverlay.classList.toggle('image-basis', basis);
+    if (previewImg) previewImg.style.display = basis ? 'none' : 'block';
     updateAutoCellSizeButtonLabel();
 }
 
@@ -2517,7 +2655,7 @@ function updateOverlayVisibility() {
 
     // Show if Active AND (Checkbox Checked or Checkbox missing)
     // If Unchecked -> Hidden "Temporarily"
-    const isChecked = !embedCb || embedCb.checked;
+    const isChecked = isImageBasisMode() ? true : (!embedCb || embedCb.checked);
     
     // Fix: Ensure we strictly hide if unchecked, regardless of active state
     if (importState.active && isChecked) {
@@ -2554,13 +2692,28 @@ function hasOverlap(a, b) {
 }
 
 function updateOutOfBoundsState() {
-    if (!importState.active) return false;
+    if (!importState.active) {
+        clearDeleteZones();
+        return false;
+    }
     const imgRect = getImageRect();
     const qrRect = getQrRect();
+    const exceed = getExceededSidesByDistance(imgRect, qrRect);
     const overlap = hasOverlap(imgRect, qrRect);
     importState.outOfBounds = !overlap;
-    if (importState.outOfBounds) importOverlay.classList.add('import-outside');
-    else importOverlay.classList.remove('import-outside');
+    if (exceed.hasExceed) {
+        importOverlay.classList.add('import-outside');
+    } else {
+        importOverlay.classList.remove('import-outside');
+    }
+
+    if (exceed.hasExceed) {
+        const usingPointerBounds = importState.isDragging || importState.isResizing;
+        const bounds = usingPointerBounds ? getPointerDeleteBounds() : null;
+        updateDeleteZones(exceed.sides, bounds);
+    } else {
+        clearDeleteZones();
+    }
     return importState.outOfBounds;
 }
 
@@ -2569,6 +2722,8 @@ function clearImportedImage() {
     importState.width = 0;
     importState.height = 0;
     importOverlay.classList.remove('import-outside');
+    importOverlay.classList.remove('image-basis');
+    clearDeleteZones();
     importOverlay.style.display = 'none';
     previewImg.removeAttribute('src');
     fileInput.value = '';
@@ -2582,6 +2737,10 @@ function clearImportedImage() {
     if (dynamicPreviewCb) {
         dynamicPreviewCb.checked = false;
         dynamicPreviewCb.disabled = true;
+    }
+    if (imageBasisCb) {
+        imageBasisCb.checked = false;
+        imageBasisCb.disabled = true;
     }
     if (cellSizeAutoBtn) cellSizeAutoBtn.style.display = 'none';
     updateMaskControls();
@@ -2603,6 +2762,10 @@ function startImportDrag(e) {
         importState.startX = importState.x;
         importState.startY = importState.y;
         importState.aspect = importState.width / importState.height;
+        importState.lastMoveDx = 0;
+        importState.lastMoveDy = 0;
+        importState.dragGrabOffsetX = importState.width / 2;
+        importState.dragGrabOffsetY = importState.height / 2;
         e.stopPropagation();
         
         // Save history BEFORE modify
@@ -2617,6 +2780,10 @@ function startImportDrag(e) {
     importState.isDragging = true;
     importState.lastX = e.clientX;
     importState.lastY = e.clientY;
+    importState.lastMoveDx = 0;
+    importState.lastMoveDy = 0;
+    importState.dragGrabOffsetX = e.clientX - importState.x;
+    importState.dragGrabOffsetY = e.clientY - importState.y;
     
     // Save history BEFORE drag starts
     saveHistory();
@@ -2639,6 +2806,8 @@ function moveImportDrag(e) {
         e.preventDefault();
         const dx = e.clientX - importState.lastX;
         const dy = e.clientY - importState.lastY;
+        importState.lastMoveDx = dx;
+        importState.lastMoveDy = dy;
         const h = importState.resizeHandle;
         
         const isCorner = ['nw','ne','sw','se'].includes(h);
@@ -2657,22 +2826,47 @@ function moveImportDrag(e) {
         } 
         // Corner Resizing (Fixed Aspect)
         else {
+            const dominantX = Math.abs(dx) >= Math.abs(dy);
             if (h === 'se') {
-                newW += dx;
-                newH = newW / importState.aspect;
+                if (dominantX) {
+                    newW += dx;
+                    newH = newW / importState.aspect;
+                } else {
+                    newH += dy;
+                    newW = newH * importState.aspect;
+                }
             } else if (h === 'sw') {
-                newW -= dx;
-                newX += dx;
-                newH = newW / importState.aspect;
+                if (dominantX) {
+                    newW -= dx;
+                    newX += dx;
+                    newH = newW / importState.aspect;
+                } else {
+                    newH += dy;
+                    newW = newH * importState.aspect;
+                    newX = importState.x + (importState.width - newW);
+                }
             } else if (h === 'ne') {
-                newW += dx;
-                newH = newW / importState.aspect;
-                newY = importState.y + (importState.height - newH); 
+                if (dominantX) {
+                    newW += dx;
+                    newH = newW / importState.aspect;
+                    newY = importState.y + (importState.height - newH);
+                } else {
+                    newH -= dy;
+                    newY += dy;
+                    newW = newH * importState.aspect;
+                }
             } else if (h === 'nw') {
-                newW -= dx;
-                newX += dx;
-                newH = newW / importState.aspect;
-                newY = importState.y + (importState.height - newH);
+                if (dominantX) {
+                    newW -= dx;
+                    newX += dx;
+                    newH = newW / importState.aspect;
+                    newY = importState.y + (importState.height - newH);
+                } else {
+                    newH -= dy;
+                    newY += dy;
+                    newW = newH * importState.aspect;
+                    newX = importState.x + (importState.width - newW);
+                }
             }
         }
         
@@ -2694,6 +2888,8 @@ function moveImportDrag(e) {
         e.preventDefault();
         const dx = e.clientX - importState.lastX;
         const dy = e.clientY - importState.lastY;
+        importState.lastMoveDx = dx;
+        importState.lastMoveDy = dy;
         
         importState.x += dx;
         importState.y += dy;
@@ -2771,56 +2967,50 @@ function getCanvasContentOffsets() {
 function applyImport(doSave = true, imageSource = previewImg) {
     const hasExternalImageSource = !!imageSource && imageSource !== previewImg;
     if (!importState.active && !hasExternalImageSource) return;
-    
-    // 1. Setup Coordinates and Temp Canvas
+    const basisMode = isImageBasisMode();
     const canvasRect = canvas.getBoundingClientRect();
-    const offsets = getCanvasContentOffsets();
-    
-    // Safety check for size
-    if (canvasRect.width === 0) return;
+    if (canvasRect.width === 0 || canvasRect.height === 0) return;
 
+    const sourceW = imageSource.naturalWidth || imageSource.width || 0;
+    const sourceH = imageSource.naturalHeight || imageSource.height || 0;
+    if (sourceW <= 0 || sourceH <= 0) return;
+
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = sourceW;
+    tmpCanvas.height = sourceH;
+    const tCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
+    tCtx.drawImage(imageSource, 0, 0, sourceW, sourceH);
+    const imgData = tCtx.getImageData(0, 0, sourceW, sourceH);
+
+    const qrSize = pixelMap.length;
+    const totalModulesVisual = qrSize + 2 * qrMargin;
     const style = window.getComputedStyle(canvas);
     const borderLeft = parseFloat(style.borderLeftWidth) || 0;
     const borderRight = parseFloat(style.borderRightWidth) || 0;
+    const borderTop = parseFloat(style.borderTopWidth) || 0;
+    const borderBottom = parseFloat(style.borderBottomWidth) || 0;
     const paddingLeft = parseFloat(style.paddingLeft) || 0;
     const paddingRight = parseFloat(style.paddingRight) || 0;
-    
-    // Visual Content Dimensions
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const paddingBottom = parseFloat(style.paddingBottom) || 0;
     const visualContentWidth = canvasRect.width - borderLeft - borderRight - paddingLeft - paddingRight;
+    const visualContentHeight = canvasRect.height - borderTop - borderBottom - paddingTop - paddingBottom;
 
-    // Relative Image Position (Image TopLeft relative to Canvas Content TopLeft)
-    // importState.relX = Distance from Border Edge. contentRelX = relX - offset.
-    const ovStyle = window.getComputedStyle(importOverlay);
-    const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
-    const ovBorderRight = parseFloat(ovStyle.borderRightWidth) || 0;
-    const ovBorderTop = parseFloat(ovStyle.borderTopWidth) || 0;
-    const ovBorderBottom = parseFloat(ovStyle.borderBottomWidth) || 0;
-    const imageRelX = importState.relX - offsets.left + ovBorderLeft;
-    const imageRelY = importState.relY - offsets.top + ovBorderTop;
+    let qrStartX = 0;
+    let qrStartY = 0;
+    let moduleW = visualContentWidth / totalModulesVisual;
+    let moduleH = visualContentWidth / totalModulesVisual;
 
-    // Create Temp Canvas with Image (Visual Size)
-    // We treat importState.width/height as "Visual Size".
-    // We will sample this canvas.
-    const tmpCanvas = document.createElement('canvas');
-    const tW = Math.max(0, Math.round(importState.width - ovBorderLeft - ovBorderRight));
-    const tH = Math.max(0, Math.round(importState.height - ovBorderTop - ovBorderBottom));
-    tmpCanvas.width = tW;
-    tmpCanvas.height = tH;
-    const tCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
-    
-    if (tW > 0 && tH > 0) {
-        tCtx.drawImage(imageSource, 0, 0, tW, tH);
+    if (basisMode) {
+        const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, canvasRect.width, canvasRect.height);
+        const scaleX = canvasRect.width / canvas.width;
+        const scaleY = canvasRect.height / canvas.height;
+        qrStartX = box.x * scaleX;
+        qrStartY = box.y * scaleY;
+        moduleW = (box.width * scaleX) / totalModulesVisual;
+        moduleH = (box.height * scaleY) / totalModulesVisual;
     }
-    const imgData = tCtx.getImageData(0, 0, tW, tH);
-    
-    // 2. Loop Modules and Sample
-    const qrSize = pixelMap.length;
-    // CRITICAL FIX: The pixelMap is just the "Logic Matrix" (e.g. 21x21).
-    // The VISUAL Canvas includes margins (4 modules on each side).
-    // So Visual Width represents (qrSize + 2 * qrMargin) modules.
-    const totalModulesVisual = qrSize + 2 * qrMargin;
-    const moduleSizeVisual = visualContentWidth / totalModulesVisual; 
-    
+
     let changed = false;
 
     for (let r = 0; r < qrSize; r++) {
@@ -2828,19 +3018,30 @@ function applyImport(doSave = true, imageSource = previewImg) {
             const cell = pixelMap[r][c];
             // Only affect Valid Free Suffix Data
             if (cell && cell.type === 'data' && cell.globalBitIndex >= payloadStartBit) {
-                // Determine Center of Module in Visual Content Coords
-                // Grid (c) is internal 0..N.
-                // Visual Position starts at qrMargin.
-                const cx = (c + qrMargin) * moduleSizeVisual + (moduleSizeVisual / 2);
-                const cy = (r + qrMargin) * moduleSizeVisual + (moduleSizeVisual / 2);
-                
-                // Map to Image Local Coords
-                const localX = Math.floor(cx - imageRelX);
-                const localY = Math.floor(cy - imageRelY);
-                
-                // Sample if inside image
-                if (localX >= 0 && localX < tW && localY >= 0 && localY < tH) {
-                    const idx = (localY * tW + localX) * 4;
+                const cx = qrStartX + (c + qrMargin) * moduleW + (moduleW / 2);
+                const cy = qrStartY + (r + qrMargin) * moduleH + (moduleH / 2);
+
+                let localX = -1;
+                let localY = -1;
+
+                if (basisMode) {
+                    localX = Math.floor((cx / canvasRect.width) * sourceW);
+                    localY = Math.floor((cy / canvasRect.height) * sourceH);
+                } else {
+                    const offsets = getCanvasContentOffsets();
+                    const ovStyle = window.getComputedStyle(importOverlay);
+                    const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
+                    const ovBorderTop = parseFloat(ovStyle.borderTopWidth) || 0;
+                    const imageRelX = importState.relX - offsets.left + ovBorderLeft;
+                    const imageRelY = importState.relY - offsets.top + ovBorderTop;
+                    const scaleX = sourceW / Math.max(1, importState.width);
+                    const scaleY = sourceH / Math.max(1, importState.height);
+                    localX = Math.floor((cx - imageRelX) * scaleX);
+                    localY = Math.floor((cy - imageRelY) * scaleY);
+                }
+
+                if (localX >= 0 && localX < sourceW && localY >= 0 && localY < sourceH) {
+                    const idx = (localY * sourceW + localX) * 4;
                     const rr = imgData.data[idx];
                     const gg = imgData.data[idx+1];
                     const bb = imgData.data[idx+2];
@@ -2857,14 +3058,10 @@ function applyImport(doSave = true, imageSource = previewImg) {
                     
                     const lum = (0.299*rB + 0.587*gB + 0.114*bB); // Range 0-255
                     
-                    // Standard Binarization (Threshold 128)
-                    // Users asked to revert strictly to standard binarization, 
-                    // unrelated to the ghost rendering thresholds.
                     const targetColor = (lum < BINARIZE_THRESHOLD) ? 1 : 0; // Black : White
-                    
-                     // Apply
-                     modifyPixel(r, c, targetColor);
-                     changed = true;
+
+                    modifyPixel(r, c, targetColor);
+                    changed = true;
                 }
             }
         }
@@ -2875,11 +3072,6 @@ function applyImport(doSave = true, imageSource = previewImg) {
         if (doSave) saveHistory();
     }
     
-    // cancelImport(); // No longer hiding overlay per "Realtime" request. User can manually close or keep open?
-    // User didn't ask to keep it open... but said "when user uploads, drag... process realtime".
-    // If we cancel import, the overlay disappears and user can't drag anymore.
-    // So we MUST NOT call cancelImport() now.
-    // cancelImport(); 
 }
 
 // Old method removed (applyImport replaced functionality)

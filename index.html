@@ -104,6 +104,10 @@
             </div>
 
             <div class="control-group" style="border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px;">
+                    <input type="checkbox" id="image-basis-cb" disabled>
+                    <span>以图片为基准</span>
+                </label>
                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                     <input type="checkbox" id="embed-image-cb">
                     <span>保留图片背景</span>
@@ -130,6 +134,12 @@
         </aside>
         <div class="splitter" id="sidebar-splitter" role="separator" aria-label="调整面板大小"></div>
         <main class="preview-area">
+            <div id="delete-hint-layer" class="delete-hint-layer" aria-hidden="true">
+                <div class="delete-hint delete-hint-left"><span class="icon">🗑️</span><span class="text">鼠标指针到此区域内，将使图片被删除</span></div>
+                <div class="delete-hint delete-hint-right"><span class="icon">🗑️</span><span class="text">鼠标指针到此区域内，将使图片被删除</span></div>
+                <div class="delete-hint delete-hint-top"><span class="icon">🗑️</span><span class="text">鼠标指针到此区域内，将使图片被删除</span></div>
+                <div class="delete-hint delete-hint-bottom"><span class="icon">🗑️</span><span class="text">鼠标指针到此区域内，将使图片被删除</span></div>
+            </div>
             <div class="canvas-wrapper">
                 <canvas id="qr-canvas"></canvas>
                 <div id="import-overlay" style="display: none; position: absolute; border: 2px dashed #00f; z-index: 10;">

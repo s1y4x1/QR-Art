@@ -236,6 +236,7 @@ button.active {
     justify-content: center;
     align-items: center;
     padding: 20px;
+    position: relative;
 }
 
 .canvas-wrapper {
@@ -323,6 +324,50 @@ canvas {
 .import-outside {
     border-color: rgba(231, 76, 60, 0.9) !important;
     background: rgba(231, 76, 60, 0.15);
+}
+
+.delete-hint-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 8;
+}
+
+.canvas-wrapper {
+    z-index: 12;
+}
+
+.delete-hint {
+    position: absolute;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(231, 76, 60, 0.5);
+    pointer-events: none;
+    color: #fff;
+    font-size: 13px;
+    gap: 8px;
+    text-align: center;
+    padding: 6px;
+}
+
+.delete-hint .icon {
+    color: #fff;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.delete-hint .text {
+    font-weight: 600;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+}
+
+#import-overlay.image-basis {
+    border-color: #1e88e5 !important;
+}
+
+#import-overlay.image-basis #preview-img {
+    display: none !important;
 }
 
 @media (orientation: portrait) {
