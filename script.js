@@ -169,9 +169,40 @@ function getAutoCellSizeCandidate() {
     return targetSize;
 }
 
+function getBasisModuleSizeFromOverlay() {
+    if (!isImageBasisMode() || !generatedQR || !importState.active) return null;
+    const modules = generatedQR.getModuleCount() + 2 * qrMargin;
+    if (modules <= 0) return null;
+
+    const displayW = parseFloat(canvas.style.width) || canvas.getBoundingClientRect().width || canvas.width;
+    const displayH = parseFloat(canvas.style.height) || canvas.getBoundingClientRect().height || canvas.height;
+    const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+    if (!box || box.width <= 0 || box.height <= 0) return null;
+
+    const module = Math.min(box.width, box.height) / modules;
+    if (!Number.isFinite(module) || module <= 0) return null;
+    return Math.max(0.1, Math.round(module * 10) / 10);
+}
+
 function updateAutoCellSizeButtonLabel() {
     if (!cellSizeAutoBtn) return;
     if (!importState.active || !hasImageUpload) return;
+
+    if (isImageBasisMode()) {
+        const basisSize = getBasisModuleSizeFromOverlay();
+        if (basisSize) {
+            CELL_SIZE = basisSize;
+            const cellSizeInput = document.getElementById('cell-size-input');
+            if (cellSizeInput) cellSizeInput.value = basisSize.toFixed(1);
+            cellSizeAutoBtn.textContent = `自动（约${basisSize.toFixed(1)}）`;
+        } else {
+            cellSizeAutoBtn.textContent = '自动';
+        }
+        cellSizeAutoBtn.disabled = true;
+        return;
+    }
+
+    cellSizeAutoBtn.disabled = false;
     const candidate = getAutoCellSizeCandidate();
     if (!candidate) return;
     cellSizeAutoBtn.textContent = `自动（约${candidate.toFixed(1)}）`;
@@ -514,6 +545,7 @@ function init() {
                 applyImport(false);
             }
             updateOverlayVisibility();
+            updateAutoCellSizeButtonLabel();
         });
     }
 
@@ -542,6 +574,27 @@ function init() {
             if (val < 0.1) val = 0.1;
             if (val > 100) val = 100;
             val = Math.round(val * 10) / 10;
+
+            if (isImageBasisMode()) {
+                const oldSize = getBasisModuleSizeFromOverlay() || CELL_SIZE;
+                CELL_SIZE = val;
+                if (importState.active && importState.width > 0 && oldSize > 0) {
+                    const ratio = val / oldSize;
+                    const centerX = importState.x + importState.width / 2;
+                    const centerY = importState.y + importState.height / 2;
+                    importState.width = Math.max(20, importState.width * ratio);
+                    importState.height = Math.max(20, importState.height * ratio);
+                    importState.x = centerX - importState.width / 2;
+                    importState.y = centerY - importState.height / 2;
+                    importState.relX = importState.x - canvas.offsetLeft;
+                    importState.relY = importState.y - canvas.offsetTop;
+                    updateOverlayTransform();
+                    updateOutOfBoundsState();
+                }
+                renderQR(false);
+                return;
+            }
+
             const oldSize = CELL_SIZE;
             if (oldSize > 0) {
                 const ratio = val / oldSize;
@@ -980,6 +1033,7 @@ function updateMaskControls() {
 }
 
 function applyOriginalImageSize() {
+    if (isImageBasisMode()) return;
     if (!importState.active || !previewImg) return;
     const imgW = previewImg.naturalWidth || previewImg.width || 0;
     const imgH = previewImg.naturalHeight || previewImg.height || 0;
@@ -1566,7 +1620,9 @@ function updateQR() {
     if (needRebuild) {
         buildPixelMap(typeNumber, eccLevel, tempMask);
         lastState = { ver: typeNumber, ecc: eccLevel, mask: tempMask }; // Temp state
-        fitToScreen();
+        if (!isImageBasisMode()) {
+            fitToScreen();
+        }
     }
     
     // Fill Suffix Buffer to Capacity
@@ -1767,8 +1823,9 @@ function renderQR(isExport, imageOverride) {
     let canvasW = baseSize;
     let canvasH = baseSize;
     if (basisMode && imageReady) {
-        canvasW = baseSize;
-        canvasH = Math.max(1, Math.round(baseSize * (srcDim.height / srcDim.width)));
+        // Keep image at its true pixel size in image-basis mode.
+        canvasW = srcDim.width;
+        canvasH = srcDim.height;
     }
 
     canvas.width = canvasW;
@@ -1992,6 +2049,10 @@ function renderQR(isExport, imageOverride) {
                 }
             }
         }
+    }
+
+    if (basisMode) {
+        updateAutoCellSizeButtonLabel();
     }
 }
 
@@ -2303,24 +2364,12 @@ function handleGlobalKey(e) {
 
         if (moved) {
             e.preventDefault();
-            
-            // importState.relX/relY is visual offset?
-            // Let's verify usage. 
-            // In handleWheel: importState.relX *= ratio; 
-            // In applyImport: mappedX = Math.floor((pixelX - imgBoxParams.x) / imgBoxParams.width * imgWidth);
-            // x = canvas.offsetLeft + relX.
-            // If I press Right, I want to move Right visually.
-            // relX is visual offset from canvas edge.
-            // So relX += dx works perfectly.
-            
-            importState.relX += dx;
-            importState.relY += dy;
-            
-            // Sync absolute coords
-            const cLeft = canvas.offsetLeft;
-            const cTop = canvas.offsetTop;
-            importState.x = cLeft + importState.relX;
-            importState.y = cTop + importState.relY;
+
+            const clamped = clampToKeepCanvasOverlap(importState.x + dx, importState.y + dy);
+            importState.x = clamped.x;
+            importState.y = clamped.y;
+            importState.relX = importState.x - canvas.offsetLeft;
+            importState.relY = importState.y - canvas.offsetTop;
             
             updateOverlayTransform();
             updateOutOfBoundsState();
@@ -2352,10 +2401,7 @@ function handleGlobalKeyUp(e) {
     if (!arrowMovePending) return;
     if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) {
         arrowMovePending = false;
-        if (updateOutOfBoundsState()) {
-            clearImportedImage();
-            return;
-        }
+        updateOutOfBoundsState();
         applyImport(true);
     }
 }
@@ -2691,6 +2737,19 @@ function hasOverlap(a, b) {
     return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
 }
 
+function clampToKeepCanvasOverlap(nextX, nextY) {
+    const qrRect = getQrRect();
+    const minOverlap = 1;
+    const minX = qrRect.left - importState.width + minOverlap;
+    const maxX = qrRect.right - minOverlap;
+    const minY = qrRect.top - importState.height + minOverlap;
+    const maxY = qrRect.bottom - minOverlap;
+    return {
+        x: Math.min(maxX, Math.max(minX, nextX)),
+        y: Math.min(maxY, Math.max(minY, nextY))
+    };
+}
+
 function updateOutOfBoundsState() {
     if (!importState.active) {
         clearDeleteZones();
@@ -2701,17 +2760,13 @@ function updateOutOfBoundsState() {
     const exceed = getExceededSidesByDistance(imgRect, qrRect);
     const overlap = hasOverlap(imgRect, qrRect);
     importState.outOfBounds = !overlap;
-    if (exceed.hasExceed) {
+    const isPointerDragging = importState.isDragging || importState.isResizing;
+    if (exceed.hasExceed && isPointerDragging) {
         importOverlay.classList.add('import-outside');
-    } else {
-        importOverlay.classList.remove('import-outside');
-    }
-
-    if (exceed.hasExceed) {
-        const usingPointerBounds = importState.isDragging || importState.isResizing;
-        const bounds = usingPointerBounds ? getPointerDeleteBounds() : null;
+        const bounds = getPointerDeleteBounds();
         updateDeleteZones(exceed.sides, bounds);
     } else {
+        importOverlay.classList.remove('import-outside');
         clearDeleteZones();
     }
     return importState.outOfBounds;
@@ -2762,6 +2817,11 @@ function startImportDrag(e) {
         importState.startX = importState.x;
         importState.startY = importState.y;
         importState.aspect = importState.width / importState.height;
+        const handle = importState.resizeHandle;
+        const hasW = handle.includes('w');
+        const hasN = handle.includes('n');
+        importState.resizeAnchorX = hasW ? (importState.x + importState.width) : importState.x;
+        importState.resizeAnchorY = hasN ? (importState.y + importState.height) : importState.y;
         importState.lastMoveDx = 0;
         importState.lastMoveDy = 0;
         importState.dragGrabOffsetX = importState.width / 2;
@@ -2816,6 +2876,7 @@ function moveImportDrag(e) {
         let newY = importState.y;
         let newW = importState.width;
         let newH = importState.height;
+        const minSize = 20;
         
         // Edge Resizing (Free)
         if (!isCorner) {
@@ -2826,53 +2887,68 @@ function moveImportDrag(e) {
         } 
         // Corner Resizing (Fixed Aspect)
         else {
-            const dominantX = Math.abs(dx) >= Math.abs(dy);
-            if (h === 'se') {
-                if (dominantX) {
-                    newW += dx;
-                    newH = newW / importState.aspect;
-                } else {
-                    newH += dy;
-                    newW = newH * importState.aspect;
-                }
-            } else if (h === 'sw') {
-                if (dominantX) {
-                    newW -= dx;
-                    newX += dx;
-                    newH = newW / importState.aspect;
-                } else {
-                    newH += dy;
-                    newW = newH * importState.aspect;
-                    newX = importState.x + (importState.width - newW);
-                }
-            } else if (h === 'ne') {
-                if (dominantX) {
-                    newW += dx;
-                    newH = newW / importState.aspect;
-                    newY = importState.y + (importState.height - newH);
-                } else {
-                    newH -= dy;
-                    newY += dy;
-                    newW = newH * importState.aspect;
-                }
-            } else if (h === 'nw') {
-                if (dominantX) {
-                    newW -= dx;
-                    newX += dx;
-                    newH = newW / importState.aspect;
-                    newY = importState.y + (importState.height - newH);
-                } else {
-                    newH -= dy;
-                    newY += dy;
-                    newW = newH * importState.aspect;
-                    newX = importState.x + (importState.width - newW);
-                }
+            const wrapperRect = canvasWrapper.getBoundingClientRect();
+            const pointerX = (e.clientX - wrapperRect.left) + canvasWrapper.scrollLeft;
+            const pointerY = (e.clientY - wrapperRect.top) + canvasWrapper.scrollTop;
+            const hasW = h.includes('w');
+            const hasN = h.includes('n');
+            const hasE = h.includes('e');
+            const hasS = h.includes('s');
+
+            const anchorX = Number.isFinite(importState.resizeAnchorX)
+                ? importState.resizeAnchorX
+                : (hasW ? importState.x + importState.width : importState.x);
+            const anchorY = Number.isFinite(importState.resizeAnchorY)
+                ? importState.resizeAnchorY
+                : (hasN ? importState.y + importState.height : importState.y);
+
+            const rawW = hasE ? (pointerX - anchorX) : (anchorX - pointerX);
+            const rawH = hasS ? (pointerY - anchorY) : (anchorY - pointerY);
+            const wFromX = Math.max(minSize, rawW);
+            const hFromX = Math.max(minSize, wFromX / importState.aspect);
+            const hFromY = Math.max(minSize, rawH);
+            const wFromY = Math.max(minSize, hFromY * importState.aspect);
+
+            const cornerXFromX = hasE ? (anchorX + wFromX) : (anchorX - wFromX);
+            const cornerYFromX = hasS ? (anchorY + hFromX) : (anchorY - hFromX);
+            const cornerXFromY = hasE ? (anchorX + wFromY) : (anchorX - wFromY);
+            const cornerYFromY = hasS ? (anchorY + hFromY) : (anchorY - hFromY);
+
+            const minYFromX = Math.min(anchorY, cornerYFromX);
+            const maxYFromX = Math.max(anchorY, cornerYFromX);
+            const minXFromY = Math.min(anchorX, cornerXFromY);
+            const maxXFromY = Math.max(anchorX, cornerXFromY);
+
+            // 必须是真正“贴边线段”，而不是只靠近某个角点。
+            const xTouch = (Math.abs(rawW - wFromX) < 1e-6) && (pointerY >= minYFromX && pointerY <= maxYFromX);
+            const yTouch = (Math.abs(rawH - hFromY) < 1e-6) && (pointerX >= minXFromY && pointerX <= maxXFromY);
+
+            const distSqX = (cornerXFromX - pointerX) * (cornerXFromX - pointerX)
+                + (cornerYFromX - pointerY) * (cornerYFromX - pointerY);
+            const distSqY = (cornerXFromY - pointerX) * (cornerXFromY - pointerX)
+                + (cornerYFromY - pointerY) * (cornerYFromY - pointerY);
+
+            if (xTouch && !yTouch) {
+                newW = wFromX;
+                newH = hFromX;
+            } else if (yTouch && !xTouch) {
+                newW = wFromY;
+                newH = hFromY;
+            } else if (distSqX <= distSqY) {
+                newW = wFromX;
+                newH = hFromX;
+            } else {
+                newW = wFromY;
+                newH = hFromY;
             }
+
+            newX = hasE ? anchorX : (anchorX - newW);
+            newY = hasS ? anchorY : (anchorY - newH);
         }
         
         // Minimum size limit
-        if (newW < 20) newW = 20;
-        if (newH < 20) newH = 20;
+        if (newW < minSize) newW = minSize;
+        if (newH < minSize) newH = minSize;
 
         importState.width = newW;
         importState.height = newH;
@@ -2908,8 +2984,10 @@ function moveImportDrag(e) {
 }
 
 function endImportDrag() {
+    let shouldDelete = false;
     if (importState.isDragging || importState.isResizing) {
-        if (updateOutOfBoundsState()) {
+        shouldDelete = updateOutOfBoundsState();
+        if (shouldDelete) {
             clearImportedImage();
             return;
         }
@@ -2920,6 +2998,12 @@ function endImportDrag() {
     importState.isDragging = false;
     importState.isResizing = false;
     importState.resizeHandle = null;
+    importState.resizeAnchorX = undefined;
+    importState.resizeAnchorY = undefined;
+    importState.lastMoveDx = 0;
+    importState.lastMoveDy = 0;
+    clearDeleteZones();
+    updateOutOfBoundsState();
 }
 
 function scaleImportImg(e) {
