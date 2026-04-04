@@ -17,6 +17,7 @@
             <div class="control-group">
                 <label>文本内容:</label>
                 <textarea id="text-input" rows="3">Hello World</textarea>
+                <div id="text-overflow-warning" class="text-overflow-warning" style="display:none;"></div>
                 <label class="inline-check">
                     <input type="checkbox" id="append-hash" checked>
                     末尾添加"#"
@@ -63,6 +64,50 @@
                 <div class="cell-size-control">
                     <input type="number" id="cell-size-input" value="8" min="0.1" max="50" step="0.1" style="width: 60px;">
                     <button id="cell-size-auto-btn" type="button" class="mask-btn" style="display: none;">自动（图片原大小）</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>模块样式:</label>
+                <div class="style-gallery" id="module-style-gallery">
+                    <button class="style-item style-btn active" data-style-target="module" data-style="square" type="button"><canvas data-style-preview="module-square" width="128" height="128"></canvas><div class="style-name">方块</div></button>
+                    <button class="style-item style-btn" data-style-target="module" data-style="rounded" type="button"><canvas data-style-preview="module-rounded" width="128" height="128"></canvas><div class="style-name">圆角</div></button>
+                    <button class="style-item style-btn" data-style-target="module" data-style="circle" type="button"><canvas data-style-preview="module-circle" width="128" height="128"></canvas><div class="style-name">圆点</div></button>
+                    <button class="style-item style-btn" data-style-target="module" data-style="diamond" type="button"><canvas data-style-preview="module-diamond" width="128" height="128"></canvas><div class="style-name">菱形</div></button>
+                    <button class="style-item style-btn" data-style-target="module" data-style="liquid" type="button"><canvas data-style-preview="module-liquid" width="128" height="128"></canvas><div class="style-name">液态</div></button>
+                </div>
+                <select id="module-style" style="display:none;">
+                    <option value="square" selected>方块</option>
+                    <option value="rounded">圆角方块</option>
+                    <option value="circle">圆点</option>
+                    <option value="diamond">菱形</option>
+                    <option value="liquid">液态</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>码眼样式:</label>
+                <div class="style-gallery" id="finder-style-gallery">
+                    <button class="style-item style-btn active" data-style-target="finder" data-style="classic" type="button"><canvas data-style-preview="finder-classic" width="224" height="224"></canvas><div class="style-name">经典</div></button>
+                    <button class="style-item style-btn" data-style-target="finder" data-style="circle" type="button"><canvas data-style-preview="finder-circle" width="224" height="224"></canvas><div class="style-name">圆形</div></button>
+                    <button class="style-item style-btn" data-style-target="finder" data-style="polar-day" type="button"><canvas data-style-preview="finder-polar-day" width="224" height="224"></canvas><div class="style-name">极昼</div></button>
+                    <button class="style-item style-btn" data-style-target="finder" data-style="polar-night" type="button"><canvas data-style-preview="finder-polar-night" width="224" height="224"></canvas><div class="style-name">极夜</div></button>
+                </div>
+                <select id="finder-style" style="display:none;">
+                    <option value="classic" selected>经典</option>
+                    <option value="circle">圆形</option>
+                    <option value="polar-day">极昼</option>
+                    <option value="polar-night">极夜</option>
+                </select>
+            </div>
+
+            <div class="control-group hz-layout" id="image-size-group" style="display:none;">
+                <label>图片大小 (Px):</label>
+                <div class="image-size-control">
+                    <input type="number" id="img-size-w" min="1" step="1" value="100" style="width: 64px;">
+                    <span>×</span>
+                    <input type="number" id="img-size-h" min="1" step="1" value="100" style="width: 64px;">
+                    <button id="img-size-reset-btn" type="button" class="mask-btn">恢复</button>
                 </div>
             </div>
 
@@ -123,7 +168,6 @@
                 <h3>高级作画</h3>
                 <p class="hint">左键绘制，右键擦除。</p>
                 <div class="tools">
-                    <button id="tool-pen" class="tool-btn active" title="画笔 (左键黑/右键白)">🖊️</button>
                     <button id="import-btn" class="tool-btn" title="上传图片 (自动像素化)">📷</button>
                     <button id="clear-draw" class="tool-btn" title="清空绘制">🗑️</button>
                     <button id="whiten-btn" class="tool-btn" title="一键美白 (填充区变白)">✨</button>

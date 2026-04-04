@@ -340,6 +340,9 @@ let CELL_SIZE = 8;
 let qrMargin = 1;
 let moduleStyle = 'square';
 let finderStyle = 'classic';
+let lastNonBasisImportRect = null;
+let basisImageWidth = 0;
+let basisImageHeight = 0;
 
 function isImageBasisMode() {
     return !!(imageBasisCb && !imageBasisCb.disabled && imageBasisCb.checked && hasImageUpload);
@@ -654,8 +657,41 @@ function refreshImageSizeControlVisibility() {
 
 function syncImageSizeInputs() {
     if (!imageSizeWInput || !imageSizeHInput || !importState.active) return;
+    if (isImageBasisMode()) {
+        imageSizeWInput.value = Math.max(1, Math.round(basisImageWidth || canvas.width || 1));
+        imageSizeHInput.value = Math.max(1, Math.round(basisImageHeight || canvas.height || 1));
+        return;
+    }
     imageSizeWInput.value = Math.max(1, Math.round(importState.width));
     imageSizeHInput.value = Math.max(1, Math.round(importState.height));
+}
+
+function scaleBasisScene(scale) {
+    if (!isImageBasisMode() || !importState.active) return;
+    if (!Number.isFinite(scale) || scale <= 0) return;
+
+    basisImageWidth = Math.max(1, Math.round((basisImageWidth || canvas.width || 1) * scale));
+    basisImageHeight = Math.max(1, Math.round((basisImageHeight || canvas.height || 1) * scale));
+
+    importState.width = Math.max(20, importState.width * scale);
+    importState.height = Math.max(20, importState.height * scale);
+    importState.relX *= scale;
+    importState.relY *= scale;
+    importState.x = canvas.offsetLeft + importState.relX;
+    importState.y = canvas.offsetTop + importState.relY;
+    syncCellSizeFromBasisBox();
+}
+
+function syncCellSizeFromBasisBox() {
+    if (!isImageBasisMode() || !generatedQR || !importState.active) return;
+    const modules = generatedQR.getModuleCount() + 2 * qrMargin;
+    if (modules <= 0) return;
+    const box = getBasisQrBoxInternal();
+    const next = Math.max(0.1, Math.round((Math.min(box.width, box.height) / modules) * 10) / 10);
+    if (!Number.isFinite(next) || next <= 0) return;
+    CELL_SIZE = next;
+    const cellSizeInput = document.getElementById('cell-size-input');
+    if (cellSizeInput) cellSizeInput.value = next.toFixed(1);
 }
 
 function getOverlayInnerBoxInternal(canvasW, canvasH, displayW, displayH) {
@@ -853,18 +889,36 @@ function init() {
             }
             const toBasis = imageBasisCb.checked;
             if (importState.active && previewImg) {
-                const prevW = importState.width;
-                const prevH = importState.height;
-                const prevRelX = importState.relX;
-                const prevRelY = importState.relY;
-
                 if (toBasis) {
-                    initImportOverlayByMode(previewImg.naturalWidth || previewImg.width || 1, previewImg.naturalHeight || previewImg.height || 1);
+                    const natW = previewImg.naturalWidth || previewImg.width || 1;
+                    const natH = previewImg.naturalHeight || previewImg.height || 1;
+                    if (!(basisImageWidth > 0 && basisImageHeight > 0)) {
+                        basisImageWidth = natW;
+                        basisImageHeight = natH;
+                    }
+                    lastNonBasisImportRect = {
+                        width: importState.width,
+                        height: importState.height,
+                        relX: importState.relX,
+                        relY: importState.relY
+                    };
+                    initImportOverlayByMode(natW, natH);
                 } else {
-                    importState.width = prevW;
-                    importState.height = prevH;
-                    importState.relX = prevRelX;
-                    importState.relY = prevRelY;
+                    if (lastNonBasisImportRect) {
+                        importState.width = lastNonBasisImportRect.width;
+                        importState.height = lastNonBasisImportRect.height;
+                        importState.relX = lastNonBasisImportRect.relX;
+                        importState.relY = lastNonBasisImportRect.relY;
+                    } else {
+                        const natW = previewImg.naturalWidth || previewImg.width || 1;
+                        const natH = previewImg.naturalHeight || previewImg.height || 1;
+                        const centerX = importState.relX + importState.width / 2;
+                        const centerY = importState.relY + importState.height / 2;
+                        importState.width = importState.width;
+                        importState.height = importState.width * (natH / natW);
+                        importState.relX = centerX - importState.width / 2;
+                        importState.relY = centerY - importState.height / 2;
+                    }
                     importState.x = canvas.offsetLeft + importState.relX;
                     importState.y = canvas.offsetTop + importState.relY;
                     const candidate = getAutoCellSizeCandidate();
@@ -909,6 +963,18 @@ function init() {
         imageSizeWInput.addEventListener('change', () => {
             if (!importState.active) return;
             let w = parseInt(imageSizeWInput.value, 10);
+            if (isImageBasisMode()) {
+                const oldW = Math.max(1, Math.round(basisImageWidth || canvas.width || 1));
+                if (!Number.isFinite(w) || w < 1) w = oldW;
+                const scale = w / oldW;
+                scaleBasisScene(scale);
+                updateOverlayTransform();
+                updateOutOfBoundsState();
+                applyImport(false);
+                syncCellSizeFromBasisBox();
+                syncImageSizeInputs();
+                return;
+            }
             if (!Number.isFinite(w) || w < 1) w = Math.max(1, Math.round(importState.width));
             const centerX = importState.relX + importState.width / 2;
             importState.width = w;
@@ -925,6 +991,18 @@ function init() {
         imageSizeHInput.addEventListener('change', () => {
             if (!importState.active) return;
             let h = parseInt(imageSizeHInput.value, 10);
+            if (isImageBasisMode()) {
+                const oldH = Math.max(1, Math.round(basisImageHeight || canvas.height || 1));
+                if (!Number.isFinite(h) || h < 1) h = oldH;
+                const scale = h / oldH;
+                scaleBasisScene(scale);
+                updateOverlayTransform();
+                updateOutOfBoundsState();
+                applyImport(false);
+                syncCellSizeFromBasisBox();
+                syncImageSizeInputs();
+                return;
+            }
             if (!Number.isFinite(h) || h < 1) h = Math.max(1, Math.round(importState.height));
             const centerY = importState.relY + importState.height / 2;
             importState.height = h;
@@ -974,10 +1052,8 @@ function init() {
                 CELL_SIZE = val;
                 if (importState.active && importState.width > 0) {
                     if (isImageBasisMode()) {
-                        importState.width *= ratio;
-                        importState.height *= ratio;
-                        importState.relX *= ratio;
-                        importState.relY *= ratio;
+                        scaleBasisScene(ratio);
+                        syncCellSizeFromBasisBox();
                     }
                     importState.x = canvas.offsetLeft + importState.relX;
                     importState.y = canvas.offsetTop + importState.relY;
@@ -1454,6 +1530,25 @@ function restoreImportOverlayToNaturalSize() {
     const imgW = previewImg.naturalWidth || previewImg.width || 0;
     const imgH = previewImg.naturalHeight || previewImg.height || 0;
     if (imgW <= 0 || imgH <= 0) return;
+
+    if (isImageBasisMode()) {
+        const oldW = Math.max(1, basisImageWidth || canvas.width || imgW);
+        basisImageWidth = imgW;
+        basisImageHeight = imgH;
+        const scale = imgW / oldW;
+        importState.width = Math.max(20, importState.width * scale);
+        importState.height = Math.max(20, importState.height * scale);
+        importState.relX *= scale;
+        importState.relY *= scale;
+        importState.x = canvas.offsetLeft + importState.relX;
+        importState.y = canvas.offsetTop + importState.relY;
+
+        updateOverlayTransform();
+        updateOutOfBoundsState();
+        applyImport(false);
+        syncImageSizeInputs();
+        return;
+    }
 
     const centerX = importState.relX + importState.width / 2;
     const centerY = importState.relY + importState.height / 2;
@@ -2442,8 +2537,9 @@ function renderQR(isExport, imageOverride) {
     let canvasW = baseSize;
     let canvasH = baseSize;
     if (basisMode && imageReady) {
-        canvasW = baseSize;
-        canvasH = Math.max(1, Math.round(baseSize * (srcDim.height / srcDim.width)));
+        // In image-basis mode, keep image pixel size fixed.
+        canvasW = Math.max(1, Math.round(basisImageWidth || srcDim.width));
+        canvasH = Math.max(1, Math.round(basisImageHeight || srcDim.height));
     }
 
     canvas.width = canvasW;
@@ -3350,6 +3446,8 @@ async function handleImageUpload(e) {
         }
 
         hasImageUpload = true;
+        basisImageWidth = previewImg.naturalWidth || previewImg.width || 0;
+        basisImageHeight = previewImg.naturalHeight || previewImg.height || 0;
         refreshImageSizeControlVisibility();
         lockAutoMaskIfNeeded();
         
@@ -3637,6 +3735,9 @@ function moveImportDrag(e) {
         importState.lastY = e.clientY;
         updateOverlayTransform();
         syncRel();
+        if (isImageBasisMode()) {
+            syncCellSizeFromBasisBox();
+        }
         didChange = true;
     } else if (importState.isDragging) { // Added else if to separate logic
         e.preventDefault();

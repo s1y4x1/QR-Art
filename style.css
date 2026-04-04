@@ -71,6 +71,17 @@ h1 {
     flex-wrap: wrap;
 }
 
+.image-size-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.image-size-control span {
+    font-weight: 600;
+    color: #666;
+}
+
 .color-control {
     display: flex;
     align-items: center;
@@ -111,6 +122,12 @@ h1 {
     font-size: 12px;
     color: #555;
     user-select: none;
+}
+
+.text-overflow-warning {
+    color: #d93025;
+    font-size: 12px;
+    line-height: 1.4;
 }
 
 .mask-gallery {
@@ -182,6 +199,48 @@ h1 {
     color: #444;
     line-height: 1.3;
 }
+
+.style-gallery {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.style-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    padding: 6px;
+    border: 1px dashed #e3e3e3;
+    border-radius: 6px;
+    background: #fff;
+    transition: all 0.15s ease;
+}
+
+.style-item:hover {
+    border-color: #3498db;
+    color: #2980b9;
+}
+
+.style-item.active {
+    border-color: #3498db;
+    background: #eaf4ff;
+    color: #1f6fb2;
+}
+
+.style-item canvas {
+    width: 64px;
+    height: 64px;
+    image-rendering: pixelated;
+    border: 1px solid #eee;
+}
+
+.style-name {
+    font-size: 11px;
+    color: #444;
+}
+
 
 label {
     font-weight: 600;
