@@ -169,43 +169,19 @@ function getAutoCellSizeCandidate() {
     return targetSize;
 }
 
-function getBasisModuleSizeFromOverlay() {
-    if (!isImageBasisMode() || !generatedQR || !importState.active) return null;
-    const modules = generatedQR.getModuleCount() + 2 * qrMargin;
-    if (modules <= 0) return null;
-
-    const displayW = parseFloat(canvas.style.width) || canvas.getBoundingClientRect().width || canvas.width;
-    const displayH = parseFloat(canvas.style.height) || canvas.getBoundingClientRect().height || canvas.height;
-    const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
-    if (!box || box.width <= 0 || box.height <= 0) return null;
-
-    const module = Math.min(box.width, box.height) / modules;
-    if (!Number.isFinite(module) || module <= 0) return null;
-    return Math.max(0.1, Math.round(module * 10) / 10);
-}
-
 function updateAutoCellSizeButtonLabel() {
     if (!cellSizeAutoBtn) return;
     if (!importState.active || !hasImageUpload) return;
-
-    if (isImageBasisMode()) {
-        const basisSize = getBasisModuleSizeFromOverlay();
-        if (basisSize) {
-            CELL_SIZE = basisSize;
-            const cellSizeInput = document.getElementById('cell-size-input');
-            if (cellSizeInput) cellSizeInput.value = basisSize.toFixed(1);
-            cellSizeAutoBtn.textContent = `自动（约${basisSize.toFixed(1)}）`;
-        } else {
-            cellSizeAutoBtn.textContent = '自动';
-        }
-        cellSizeAutoBtn.disabled = true;
-        return;
-    }
-
-    cellSizeAutoBtn.disabled = false;
     const candidate = getAutoCellSizeCandidate();
     if (!candidate) return;
     cellSizeAutoBtn.textContent = `自动（约${candidate.toFixed(1)}）`;
+}
+
+function refreshCellSizeAutoButtonVisibility() {
+    if (!cellSizeAutoBtn) return;
+    const show = !!(hasImageUpload && !isImageBasisMode());
+    cellSizeAutoBtn.style.display = show ? 'inline-flex' : 'none';
+    if (show) updateAutoCellSizeButtonLabel();
 }
 
 function setStaticGifPreview() {
@@ -296,6 +272,7 @@ let pixelMap = []; // 2D array: { type: 'data'|'ec'|'func', globalBitIndex, mask
 let totalDataBits = 0;
 let headerBitLength = 0; 
 let payloadStartBit = 0; // Header + UserText + '#'
+let payloadEditableEndBit = 0; // Exclusive end bit index of editable suffix payload
 
 // DOM Elements
 const canvas = document.getElementById('qr-canvas');
@@ -330,6 +307,7 @@ let importState = {
 };
 
 const textInput = document.getElementById('text-input');
+const textOverflowWarning = document.getElementById('text-overflow-warning');
 const eccSelect = document.getElementById('ecc-level');
 const verRange = document.getElementById('version-range');
 const verDisplay = document.getElementById('version-display');
@@ -349,9 +327,19 @@ const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
+const moduleStyleSelect = document.getElementById('module-style');
+const finderStyleSelect = document.getElementById('finder-style');
+const moduleStyleButtons = document.querySelectorAll('.style-btn[data-style-target="module"]');
+const finderStyleButtons = document.querySelectorAll('.style-btn[data-style-target="finder"]');
+const imageSizeGroup = document.getElementById('image-size-group');
+const imageSizeWInput = document.getElementById('img-size-w');
+const imageSizeHInput = document.getElementById('img-size-h');
+const imageSizeResetBtn = document.getElementById('img-size-reset-btn');
 
 let CELL_SIZE = 8;
 let qrMargin = 1;
+let moduleStyle = 'square';
+let finderStyle = 'classic';
 
 function isImageBasisMode() {
     return !!(imageBasisCb && !imageBasisCb.disabled && imageBasisCb.checked && hasImageUpload);
@@ -363,6 +351,311 @@ function getSourceDimensions(imageSource = previewImg) {
         width: imageSource.naturalWidth || imageSource.width || 0,
         height: imageSource.naturalHeight || imageSource.height || 0
     };
+}
+
+function isFinderCell(r, c, count) {
+    const inTL = r >= 0 && r <= 6 && c >= 0 && c <= 6;
+    const inTR = r >= 0 && r <= 6 && c >= count - 7 && c <= count - 1;
+    const inBL = r >= count - 7 && r <= count - 1 && c >= 0 && c <= 6;
+    return inTL || inTR || inBL;
+}
+
+function getFinderLocalCoord(r, c, count) {
+    if (r >= 0 && r <= 6 && c >= 0 && c <= 6) return { x: c, y: r };
+    if (r >= 0 && r <= 6 && c >= count - 7 && c <= count - 1) return { x: c - (count - 7), y: r };
+    if (r >= count - 7 && r <= count - 1 && c >= 0 && c <= 6) return { x: c, y: r - (count - 7) };
+    return null;
+}
+
+function getVersionFromCount(count) {
+    return Math.max(1, Math.round((count - 17) / 4));
+}
+
+function getAlignmentCenters(count) {
+    if (!qrcode.QRUtil || !qrcode.QRUtil.getPatternPosition) return [];
+    const version = getVersionFromCount(count);
+    if (version < 2) return [];
+    const positions = qrcode.QRUtil.getPatternPosition(version) || [];
+    const centers = [];
+    positions.forEach((ry) => {
+        positions.forEach((cx) => {
+            const overlapsFinder =
+                (ry < 9 && cx < 9) ||
+                (ry < 9 && cx > count - 9) ||
+                (ry > count - 9 && cx < 9);
+            if (!overlapsFinder) centers.push({ r: ry, c: cx });
+        });
+    });
+    return centers;
+}
+
+function getAlignLocalCoord(r, c, count) {
+    const centers = getAlignmentCenters(count);
+    for (let i = 0; i < centers.length; i++) {
+        const cc = centers[i];
+        if (r >= cc.r - 2 && r <= cc.r + 2 && c >= cc.c - 2 && c <= cc.c + 2) {
+            return { x: c - (cc.c - 2), y: r - (cc.r - 2) };
+        }
+    }
+    return null;
+}
+
+const FINDER_CIRCLE_7 = [
+    [0, 1, 1, 1, 1, 1, 0],
+    [1, 1, 0, 0, 0, 1, 1],
+    [1, 0, 1, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 0, 1],
+    [1, 1, 0, 0, 0, 1, 1],
+    [0, 1, 1, 1, 1, 1, 0]
+];
+
+const ALIGN_CIRCLE_5 = [
+    [0, 1, 1, 1, 0],
+    [1, 0, 0, 0, 1],
+    [1, 0, 1, 0, 1],
+    [1, 0, 0, 0, 1],
+    [0, 1, 1, 1, 0]
+];
+
+// 用户指定模板：'-' 在极昼=0，极夜=1。
+const FINDER_POLAR_7 = [
+    [null, null, null, 1, null, null, null],
+    [null, null, null, 0, null, null, null],
+    [null, null, null, 1, null, null, null],
+    [1, 0, 1, 1, 1, 0, 1],
+    [null, null, null, 1, null, null, null],
+    [null, null, null, 0, null, null, null],
+    [null, null, null, 1, null, null, null]
+];
+
+const ALIGN_POLAR_5 = [
+    [null, null, 1, null, null],
+    [null, null, 0, null, null],
+    [1, 0, 1, 0, 1],
+    [null, null, 0, null, null],
+    [null, null, 1, null, null]
+];
+
+function getStyledFinderBit(style, localX, localY, size) {
+    if (style === 'classic') return null;
+    if (size === 7) {
+        if (style === 'circle') return FINDER_CIRCLE_7[localY][localX] === 1;
+        const v = FINDER_POLAR_7[localY][localX];
+        if (v === null) return style === 'polar-night';
+        return v === 1;
+    }
+    if (style === 'circle') return ALIGN_CIRCLE_5[localY][localX] === 1;
+    const v = ALIGN_POLAR_5[localY][localX];
+    if (v === null) return style === 'polar-night';
+    return v === 1;
+}
+
+function getClassicFinderBit(localX, localY, size) {
+    if (size === 7) {
+        const outer = localX === 0 || localX === 6 || localY === 0 || localY === 6;
+        const core = localX >= 2 && localX <= 4 && localY >= 2 && localY <= 4;
+        return outer || core;
+    }
+    const outer = localX === 0 || localX === 4 || localY === 0 || localY === 4;
+    const core = localX === 2 && localY === 2;
+    return outer || core;
+}
+
+function getFinderAlignOverride(style, r, c, count) {
+    if (style === 'classic') return null;
+
+    const finderLocal = getFinderLocalCoord(r, c, count);
+    if (finderLocal) {
+        return getStyledFinderBit(style, finderLocal.x, finderLocal.y, 7);
+    }
+
+    const alignLocal = getAlignLocalCoord(r, c, count);
+    if (alignLocal) {
+        return getStyledFinderBit(style, alignLocal.x, alignLocal.y, 5);
+    }
+
+    return null;
+}
+
+function drawRoundedRectPath(drawCtx, x, y, w, h, radii) {
+    const tl = Math.max(0, Math.min(Math.min(w, h) / 2, radii.tl || 0));
+    const tr = Math.max(0, Math.min(Math.min(w, h) / 2, radii.tr || 0));
+    const br = Math.max(0, Math.min(Math.min(w, h) / 2, radii.br || 0));
+    const bl = Math.max(0, Math.min(Math.min(w, h) / 2, radii.bl || 0));
+
+    drawCtx.beginPath();
+    drawCtx.moveTo(x + tl, y);
+    drawCtx.lineTo(x + w - tr, y);
+    if (tr > 0) drawCtx.quadraticCurveTo(x + w, y, x + w, y + tr);
+    else drawCtx.lineTo(x + w, y);
+    drawCtx.lineTo(x + w, y + h - br);
+    if (br > 0) drawCtx.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
+    else drawCtx.lineTo(x + w, y + h);
+    drawCtx.lineTo(x + bl, y + h);
+    if (bl > 0) drawCtx.quadraticCurveTo(x, y + h, x, y + h - bl);
+    else drawCtx.lineTo(x, y + h);
+    drawCtx.lineTo(x, y + tl);
+    if (tl > 0) drawCtx.quadraticCurveTo(x, y, x + tl, y);
+    else drawCtx.lineTo(x, y);
+    drawCtx.closePath();
+}
+
+function drawLiquidConnectedModule(drawCtx, x, y, w, h, color, neighbors, carveColor = '#ffffff') {
+    const ox = x;
+    const oy = y;
+    const boxW = w;
+    const boxH = h;
+    const base = Math.min(boxW, boxH);
+    const radius = Math.max(1, base * 0.46);
+
+    const tl = (!neighbors.up && !neighbors.left) ? radius : 0;
+    const tr = (!neighbors.up && !neighbors.right) ? radius : 0;
+    const br = (!neighbors.down && !neighbors.right) ? radius : 0;
+    const bl = (!neighbors.down && !neighbors.left) ? radius : 0;
+
+    drawCtx.fillStyle = color;
+    drawRoundedRectPath(drawCtx, ox, oy, boxW, boxH, { tl, tr, br, bl });
+    drawCtx.fill();
+
+    // 仅在“折角包围块”（仅两侧相邻、对侧为空）上补1/4四角星扇形（astroid），不使用1/4圆扇形。
+    const fillet = Math.max(1, base * 0.34);
+    drawCtx.fillStyle = color;
+
+    const fillQuarterStarPatch = (cx, cy, sx, sy, r) => {
+        const steps = 14;
+        drawCtx.beginPath();
+        drawCtx.moveTo(cx, cy);
+        drawCtx.lineTo(cx + sx * r, cy);
+        for (let i = 0; i <= steps; i++) {
+            const t = (i / steps) * (Math.PI / 2);
+            const px = cx + sx * r * Math.pow(Math.cos(t), 3);
+            const py = cy + sy * r * Math.pow(Math.sin(t), 3);
+            drawCtx.lineTo(px, py);
+        }
+        drawCtx.closePath();
+        drawCtx.fill();
+    };
+
+    if (neighbors.up && neighbors.left && !neighbors.upLeft) {
+        fillQuarterStarPatch(ox, oy, -1, -1, fillet);
+    }
+    if (neighbors.up && neighbors.right && !neighbors.upRight) {
+        fillQuarterStarPatch(ox + boxW, oy, 1, -1, fillet);
+    }
+    if (neighbors.down && neighbors.right && !neighbors.downRight) {
+        fillQuarterStarPatch(ox + boxW, oy + boxH, 1, 1, fillet);
+    }
+    if (neighbors.down && neighbors.left && !neighbors.downLeft) {
+        fillQuarterStarPatch(ox, oy + boxH, -1, 1, fillet);
+    }
+}
+
+function drawStyledModuleOn(drawCtx, x, y, w, h, style, color) {
+    const size = Math.min(w, h);
+    const ox = x + (w - size) / 2;
+    const oy = y + (h - size) / 2;
+
+    drawCtx.fillStyle = color;
+    if (style === 'circle') {
+        drawCtx.beginPath();
+        drawCtx.arc(ox + size / 2, oy + size / 2, size / 2, 0, Math.PI * 2);
+        drawCtx.fill();
+        return;
+    }
+    if (style === 'rounded') {
+        const radius = Math.max(1, size * 0.22);
+        drawRoundedRectPath(drawCtx, ox, oy, size, size, { tl: radius, tr: radius, br: radius, bl: radius });
+        drawCtx.fill();
+        return;
+    }
+    if (style === 'diamond') {
+        drawCtx.beginPath();
+        drawCtx.moveTo(ox + size / 2, oy);
+        drawCtx.lineTo(ox + size, oy + size / 2);
+        drawCtx.lineTo(ox + size / 2, oy + size);
+        drawCtx.lineTo(ox, oy + size / 2);
+        drawCtx.closePath();
+        drawCtx.fill();
+        return;
+    }
+    if (style === 'liquid') {
+        const radius = Math.max(1, size * 0.45);
+        drawRoundedRectPath(drawCtx, ox, oy, size, size, { tl: radius, tr: radius, br: radius, bl: radius });
+        drawCtx.fill();
+        return;
+    }
+    drawCtx.fillRect(x, y, w, h);
+}
+
+function drawStyledModule(x, y, w, h, style, color) {
+    drawStyledModuleOn(ctx, x, y, w, h, style, color);
+}
+
+function drawBullseye(drawCtx, cx, cy, moduleSize, outerModules, innerModules, coreModules, fgColor, bgColor) {
+    const outerR = (outerModules / 2) * moduleSize;
+    const innerR = (innerModules / 2) * moduleSize;
+    const coreR = (coreModules / 2) * moduleSize;
+
+    drawCtx.fillStyle = fgColor;
+    drawCtx.beginPath();
+    drawCtx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    drawCtx.fill();
+
+    drawCtx.fillStyle = bgColor;
+    drawCtx.beginPath();
+    drawCtx.arc(cx, cy, innerR, 0, Math.PI * 2);
+    drawCtx.fill();
+
+    drawCtx.fillStyle = fgColor;
+    drawCtx.beginPath();
+    drawCtx.arc(cx, cy, coreR, 0, Math.PI * 2);
+    drawCtx.fill();
+}
+
+function drawCircleFinderStyle(drawCtx, count, qrOriginX, qrOriginY, moduleW, moduleH, fgColor, bgColor) {
+    const unit = Math.min(moduleW, moduleH);
+    const offsetX = (moduleW - unit) / 2;
+    const offsetY = (moduleH - unit) / 2;
+
+    const finderStarts = [
+        { r: 0, c: 0 },
+        { r: 0, c: count - 7 },
+        { r: count - 7, c: 0 }
+    ];
+
+    finderStarts.forEach((pos) => {
+        const x0 = qrOriginX + (pos.c + qrMargin) * moduleW + offsetX;
+        const y0 = qrOriginY + (pos.r + qrMargin) * moduleH + offsetY;
+        const cx = x0 + 3.5 * unit;
+        const cy = y0 + 3.5 * unit;
+        drawBullseye(drawCtx, cx, cy, unit, 7, 5, 3, fgColor, bgColor);
+    });
+
+    const alignCenters = getAlignmentCenters(count);
+    alignCenters.forEach((ac) => {
+        const x0 = qrOriginX + (ac.c - 2 + qrMargin) * moduleW + offsetX;
+        const y0 = qrOriginY + (ac.r - 2 + qrMargin) * moduleH + offsetY;
+        const cx = x0 + 2.5 * unit;
+        const cy = y0 + 2.5 * unit;
+        drawBullseye(drawCtx, cx, cy, unit, 5, 3, 1, fgColor, bgColor);
+    });
+}
+
+function refreshImageSizeControlVisibility() {
+    if (!imageSizeGroup) return;
+    const show = isImageBasisMode();
+    imageSizeGroup.style.display = show ? 'flex' : 'none';
+    if (imageSizeWInput) imageSizeWInput.disabled = !hasImageUpload || !show;
+    if (imageSizeHInput) imageSizeHInput.disabled = !hasImageUpload || !show;
+    if (imageSizeResetBtn) imageSizeResetBtn.disabled = !hasImageUpload || !show;
+    refreshCellSizeAutoButtonVisibility();
+}
+
+function syncImageSizeInputs() {
+    if (!imageSizeWInput || !imageSizeHInput || !importState.active) return;
+    imageSizeWInput.value = Math.max(1, Math.round(importState.width));
+    imageSizeHInput.value = Math.max(1, Math.round(importState.height));
 }
 
 function getOverlayInnerBoxInternal(canvasW, canvasH, displayW, displayH) {
@@ -382,6 +675,26 @@ function getOverlayInnerBoxInternal(canvasW, canvasH, displayW, displayH) {
         y: (relY - offsets.top + ovBorderTop) * ratioY,
         width: Math.max(0, (importState.width - ovBorderLeft - ovBorderRight) * ratioX),
         height: Math.max(0, (importState.height - ovBorderTop - ovBorderBottom) * ratioY)
+    };
+}
+
+function getBasisQrBoxInternal() {
+    if (!importState.active || importState.width <= 0 || importState.height <= 0) {
+        return {
+            x: 0,
+            y: 0,
+            width: Math.max(1, canvas.width),
+            height: Math.max(1, canvas.height)
+        };
+    }
+    const displayW = parseFloat(canvas.style.width) || canvas.width;
+    const displayH = parseFloat(canvas.style.height) || canvas.height;
+    const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+    return {
+        x: box.x,
+        y: box.y,
+        width: Math.max(1, box.width),
+        height: Math.max(1, box.height)
     };
 }
 
@@ -538,14 +851,95 @@ function init() {
                 imageBasisCb.checked = false;
                 return;
             }
-            renderQR(false);
+            const toBasis = imageBasisCb.checked;
             if (importState.active && previewImg) {
-                initImportOverlayByMode(previewImg.naturalWidth || previewImg.width || 1, previewImg.naturalHeight || previewImg.height || 1);
+                const prevW = importState.width;
+                const prevH = importState.height;
+                const prevRelX = importState.relX;
+                const prevRelY = importState.relY;
+
+                if (toBasis) {
+                    initImportOverlayByMode(previewImg.naturalWidth || previewImg.width || 1, previewImg.naturalHeight || previewImg.height || 1);
+                } else {
+                    importState.width = prevW;
+                    importState.height = prevH;
+                    importState.relX = prevRelX;
+                    importState.relY = prevRelY;
+                    importState.x = canvas.offsetLeft + importState.relX;
+                    importState.y = canvas.offsetTop + importState.relY;
+                    const candidate = getAutoCellSizeCandidate();
+                    if (candidate) {
+                        CELL_SIZE = candidate;
+                        const cellSizeInput = document.getElementById('cell-size-input');
+                        if (cellSizeInput) cellSizeInput.value = candidate.toFixed(1);
+                    }
+                }
+
+                renderQR(false);
                 updateOverlayTransform();
                 applyImport(false);
+                syncImageSizeInputs();
+            } else {
+                renderQR(false);
             }
+            refreshImageSizeControlVisibility();
             updateOverlayVisibility();
-            updateAutoCellSizeButtonLabel();
+        });
+    }
+
+    if (moduleStyleSelect) {
+        moduleStyle = moduleStyleSelect.value || moduleStyle;
+        moduleStyleSelect.addEventListener('change', () => {
+            moduleStyle = moduleStyleSelect.value;
+            syncStyleButtonState('module');
+            renderQR(false);
+        });
+    }
+
+    if (finderStyleSelect) {
+        finderStyle = finderStyleSelect.value || finderStyle;
+        finderStyleSelect.addEventListener('change', () => {
+            finderStyle = finderStyleSelect.value;
+            syncStyleButtonState('finder');
+            renderQR(false);
+        });
+    }
+
+    if (imageSizeWInput) {
+        imageSizeWInput.addEventListener('change', () => {
+            if (!importState.active) return;
+            let w = parseInt(imageSizeWInput.value, 10);
+            if (!Number.isFinite(w) || w < 1) w = Math.max(1, Math.round(importState.width));
+            const centerX = importState.relX + importState.width / 2;
+            importState.width = w;
+            importState.relX = centerX - importState.width / 2;
+            importState.x = canvas.offsetLeft + importState.relX;
+            updateOverlayTransform();
+            updateOutOfBoundsState();
+            applyImport(false);
+            syncImageSizeInputs();
+        });
+    }
+
+    if (imageSizeHInput) {
+        imageSizeHInput.addEventListener('change', () => {
+            if (!importState.active) return;
+            let h = parseInt(imageSizeHInput.value, 10);
+            if (!Number.isFinite(h) || h < 1) h = Math.max(1, Math.round(importState.height));
+            const centerY = importState.relY + importState.height / 2;
+            importState.height = h;
+            importState.relY = centerY - importState.height / 2;
+            importState.y = canvas.offsetTop + importState.relY;
+            updateOverlayTransform();
+            updateOutOfBoundsState();
+            applyImport(false);
+            syncImageSizeInputs();
+        });
+    }
+
+    if (imageSizeResetBtn) {
+        imageSizeResetBtn.addEventListener('click', () => {
+            restoreImportOverlayToNaturalSize();
         });
     }
 
@@ -574,36 +968,17 @@ function init() {
             if (val < 0.1) val = 0.1;
             if (val > 100) val = 100;
             val = Math.round(val * 10) / 10;
-
-            if (isImageBasisMode()) {
-                const oldSize = getBasisModuleSizeFromOverlay() || CELL_SIZE;
-                CELL_SIZE = val;
-                if (importState.active && importState.width > 0 && oldSize > 0) {
-                    const ratio = val / oldSize;
-                    const centerX = importState.x + importState.width / 2;
-                    const centerY = importState.y + importState.height / 2;
-                    importState.width = Math.max(20, importState.width * ratio);
-                    importState.height = Math.max(20, importState.height * ratio);
-                    importState.x = centerX - importState.width / 2;
-                    importState.y = centerY - importState.height / 2;
-                    importState.relX = importState.x - canvas.offsetLeft;
-                    importState.relY = importState.y - canvas.offsetTop;
-                    updateOverlayTransform();
-                    updateOutOfBoundsState();
-                }
-                renderQR(false);
-                return;
-            }
-
             const oldSize = CELL_SIZE;
             if (oldSize > 0) {
                 const ratio = val / oldSize;
                 CELL_SIZE = val;
                 if (importState.active && importState.width > 0) {
-                    importState.width *= ratio;
-                    importState.height *= ratio;
-                    importState.relX *= ratio;
-                    importState.relY *= ratio;
+                    if (isImageBasisMode()) {
+                        importState.width *= ratio;
+                        importState.height *= ratio;
+                        importState.relX *= ratio;
+                        importState.relY *= ratio;
+                    }
                     importState.x = canvas.offsetLeft + importState.relX;
                     importState.y = canvas.offsetTop + importState.relY;
                     updateOverlayTransform();
@@ -726,7 +1101,9 @@ function init() {
     }
 
     // Tools
-    toolPen.addEventListener('click', () => setTool('pen'));
+    if (toolPen) {
+        toolPen.addEventListener('click', () => setTool('pen'));
+    }
     
     clearBtn.addEventListener('click', () => {
         // Manually clear bytes instead of full reset to allow Undo
@@ -766,6 +1143,7 @@ function init() {
         hasUserEdits = false;
         hasImageUpload = false;
         maskPattern = -1;
+        refreshImageSizeControlVisibility();
         updateMaskControls();
 
         updateQR();
@@ -855,13 +1233,20 @@ function init() {
 
     // Render mask previews
     renderMaskGallery();
+    renderStyleGallery();
+    setupStyleGalleryButtons();
+    syncStyleButtonState('module');
+    syncStyleButtonState('finder');
     updateMaskControls();
+    refreshImageSizeControlVisibility();
     syncHexInputs();
 }
 
 function setTool(tool) {
     activeTool = tool;
-    toolPen.classList.toggle('active', tool === 'pen');
+    if (toolPen) {
+        toolPen.classList.toggle('active', tool === 'pen');
+    }
 }
 
 function parseHexColor(hex) {
@@ -1033,7 +1418,6 @@ function updateMaskControls() {
 }
 
 function applyOriginalImageSize() {
-    if (isImageBasisMode()) return;
     if (!importState.active || !previewImg) return;
     const imgW = previewImg.naturalWidth || previewImg.width || 0;
     const imgH = previewImg.naturalHeight || previewImg.height || 0;
@@ -1053,14 +1437,38 @@ function applyOriginalImageSize() {
     if (cellSizeInput) cellSizeInput.value = targetSize.toFixed(1);
     if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `自动（约${targetSize.toFixed(1)}）`;
 
-    importState.width = importState.width * ratio;
-    importState.height = importState.height * ratio;
-    importState.relX = oldRelX * ratio;
-    importState.relY = oldRelY * ratio;
+    if (isImageBasisMode()) {
+        importState.width = importState.width * ratio;
+        importState.height = importState.height * ratio;
+        importState.relX = oldRelX * ratio;
+        importState.relY = oldRelY * ratio;
+    }
     importState.x = canvas.offsetLeft + importState.relX;
     importState.y = canvas.offsetTop + importState.relY;
     updateOverlayTransform();
     updateOutOfBoundsState();
+}
+
+function restoreImportOverlayToNaturalSize() {
+    if (!importState.active || !previewImg) return;
+    const imgW = previewImg.naturalWidth || previewImg.width || 0;
+    const imgH = previewImg.naturalHeight || previewImg.height || 0;
+    if (imgW <= 0 || imgH <= 0) return;
+
+    const centerX = importState.relX + importState.width / 2;
+    const centerY = importState.relY + importState.height / 2;
+
+    importState.width = imgW;
+    importState.height = imgH;
+    importState.relX = centerX - importState.width / 2;
+    importState.relY = centerY - importState.height / 2;
+    importState.x = canvas.offsetLeft + importState.relX;
+    importState.y = canvas.offsetTop + importState.relY;
+
+    updateOverlayTransform();
+    updateOutOfBoundsState();
+    applyImport(false);
+    syncImageSizeInputs();
 }
 
 function setMaskPattern(nextMask) {
@@ -1144,6 +1552,158 @@ function renderMaskGallery() {
     });
 }
 
+function drawModulePreviewPattern(pCtx, style, darkColor) {
+    const moduleSize = 16;
+    const cols = 5;
+    const rows = 5;
+    const patternW = cols * moduleSize;
+    const patternH = rows * moduleSize;
+    const padX = Math.floor((pCtx.canvas.width - patternW) / 2);
+    const padY = Math.floor((pCtx.canvas.height - patternH) / 2);
+    const cw = moduleSize;
+    const ch = moduleSize;
+    const pattern = [
+        [0, 1, 1, 0, 0],
+        [1, 1, 1, 1, 0],
+        [1, 1, 1, 1, 1],
+        [0, 1, 1, 1, 1],
+        [0, 0, 1, 1, 0]
+    ];
+
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (!pattern[r][c]) continue;
+            const x = padX + c * cw;
+            const y = padY + r * ch;
+
+            if (style === 'liquid') {
+                const up = r > 0 && pattern[r - 1][c] === 1;
+                const right = c < cols - 1 && pattern[r][c + 1] === 1;
+                const down = r < rows - 1 && pattern[r + 1][c] === 1;
+                const left = c > 0 && pattern[r][c - 1] === 1;
+                const upLeft = r > 0 && c > 0 && pattern[r - 1][c - 1] === 1;
+                const upRight = r > 0 && c < cols - 1 && pattern[r - 1][c + 1] === 1;
+                const downLeft = r < rows - 1 && c > 0 && pattern[r + 1][c - 1] === 1;
+                const downRight = r < rows - 1 && c < cols - 1 && pattern[r + 1][c + 1] === 1;
+                drawLiquidConnectedModule(pCtx, x, y, cw, ch, darkColor, {
+                    up, right, down, left,
+                    upLeft, upRight, downLeft, downRight
+                }, '#ffffff');
+            } else {
+                drawStyledModuleOn(pCtx, x, y, cw, ch, style, darkColor);
+            }
+        }
+    }
+}
+
+function drawFinderPreviewPattern(pCtx, style, darkColor) {
+    const moduleSize = 16;
+    const margin = 12;
+    const finderSize = 7 * moduleSize;
+    const alignSize = 5 * moduleSize;
+
+    if (style === 'circle') {
+        const bg = '#ffffff';
+        const fx = margin;
+        const fy = margin;
+        drawBullseye(pCtx, fx + finderSize / 2, fy + finderSize / 2, moduleSize, 7, 5, 3, darkColor, bg);
+        const ax = pCtx.canvas.width - margin - alignSize;
+        const ay = pCtx.canvas.height - margin - alignSize;
+        drawBullseye(pCtx, ax + alignSize / 2, ay + alignSize / 2, moduleSize, 5, 3, 1, darkColor, bg);
+        return;
+    }
+
+    const pad = margin;
+    const cells = 7;
+    const cw = moduleSize;
+
+    for (let r = 0; r < cells; r++) {
+        for (let c = 0; c < cells; c++) {
+            const isFinder = (style === 'classic')
+                ? getClassicFinderBit(c, r, 7)
+                : getStyledFinderBit(style, c, r, 7);
+            if (!isFinder) continue;
+            const x = pad + c * cw;
+            const y = pad + r * cw;
+            drawStyledModuleOn(pCtx, x, y, cw, cw, 'square', darkColor);
+        }
+    }
+
+    const aPad = pCtx.canvas.width - margin - alignSize;
+    const aSize = alignSize;
+    const aCells = 5;
+    const aw = moduleSize;
+    for (let r = 0; r < aCells; r++) {
+        for (let c = 0; c < aCells; c++) {
+            const isAlign = (style === 'classic')
+                ? getClassicFinderBit(c, r, 5)
+                : getStyledFinderBit(style, c, r, 5);
+            if (!isAlign) continue;
+            const x = aPad + c * aw;
+            const y = aPad + r * aw;
+            drawStyledModuleOn(pCtx, x, y, aw, aw, 'square', darkColor);
+        }
+    }
+}
+
+function renderStyleGallery() {
+    const canvases = document.querySelectorAll('canvas[data-style-preview]');
+    canvases.forEach((canvasNode) => {
+        const key = canvasNode.dataset.stylePreview || '';
+        if (!key) return;
+        const parts = key.split('-');
+        const target = parts[0];
+        const style = parts.slice(1).join('-');
+        const pCtx = canvasNode.getContext('2d', { willReadFrequently: true });
+        if (!pCtx) return;
+        pCtx.imageSmoothingEnabled = false;
+
+        pCtx.clearRect(0, 0, canvasNode.width, canvasNode.height);
+        pCtx.fillStyle = '#ffffff';
+        pCtx.fillRect(0, 0, canvasNode.width, canvasNode.height);
+        pCtx.strokeStyle = '#d7d7d7';
+        pCtx.strokeRect(0.5, 0.5, canvasNode.width - 1, canvasNode.height - 1);
+
+        if (target === 'module') {
+            drawModulePreviewPattern(pCtx, style, '#111111');
+        } else if (target === 'finder') {
+            drawFinderPreviewPattern(pCtx, style, '#111111');
+        }
+    });
+}
+
+function syncStyleButtonState(target) {
+    const buttons = target === 'module' ? moduleStyleButtons : finderStyleButtons;
+    const value = target === 'module' ? moduleStyle : finderStyle;
+    if (!buttons) return;
+    buttons.forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.style === value);
+    });
+}
+
+function setupStyleGalleryButtons() {
+    if (moduleStyleButtons) {
+        moduleStyleButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                moduleStyle = btn.dataset.style || 'square';
+                if (moduleStyleSelect) moduleStyleSelect.value = moduleStyle;
+                syncStyleButtonState('module');
+                renderQR(false);
+            });
+        });
+    }
+    if (finderStyleButtons) {
+        finderStyleButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                finderStyle = btn.dataset.style || 'classic';
+                if (finderStyleSelect) finderStyleSelect.value = finderStyle;
+                syncStyleButtonState('finder');
+                renderQR(false);
+            });
+        });
+    }
+}
+
 function initSidebarSplitter() {
     const splitter = document.getElementById('sidebar-splitter');
     const container = document.querySelector('.container');
@@ -1187,8 +1747,26 @@ function initSidebarSplitter() {
 function resetSuffix() {
     currentSuffixBytes = [];
     lastCapacity = 0;
+    payloadStartBit = 0;
+    payloadEditableEndBit = 0;
     historyStack = [];
     historyStep = -1;
+}
+
+function isEditableDataCell(cell) {
+    if (!cell || cell.type !== 'data') return false;
+    return cell.globalBitIndex >= payloadStartBit && cell.globalBitIndex < payloadEditableEndBit;
+}
+
+function updateTextOverflowWarning(limitInfo) {
+    if (!textOverflowWarning) return;
+    if (!limitInfo || !limitInfo.exceeds) {
+        textOverflowWarning.style.display = 'none';
+        textOverflowWarning.textContent = '';
+        return;
+    }
+    textOverflowWarning.style.display = 'block';
+    textOverflowWarning.textContent = `${limitInfo.current}/${limitInfo.max}`;
 }
 
 // --- Core Mapping Logic ---
@@ -1383,48 +1961,63 @@ function fitToScreen() {
 }
 function setSuffixUniform(targetColor) { // targetColor: 0=White, 1=Black
     if (!pixelMap) return;
-    
-    // Check coverage setup
-    const embedImage = document.getElementById('embed-image-cb') && document.getElementById('embed-image-cb').checked;
+    const basisMode = isImageBasisMode();
     let checkCoverage = false;
-    let imgInternalX, imgInternalY, imgInternalW, imgInternalH;
-    let tempCtx = null;
     let imgData = null;
-    let imgRatioW = 1, imgRatioH = 1;
+    let sourceW = 0;
+    let sourceH = 0;
+    let qrStartX = 0;
+    let qrStartY = 0;
+    let moduleW = CELL_SIZE;
+    let moduleH = CELL_SIZE;
+    let imageBoxX = 0;
+    let imageBoxY = 0;
+    let imageBoxW = 1;
+    let imageBoxH = 1;
 
     if (previewImg.src && importState.width > 0) {
-        checkCoverage = true;
-        
-        const count = pixelMap.length;
-        const sizePx = (count + 2 * qrMargin) * CELL_SIZE;  // Internal layout size
-        const displaySize = parseFloat(canvas.style.width) || canvas.width; // Visual size
-        const ratio = sizePx / displaySize; // Ratio: Internal / Visual
-        
-        const offsets = getCanvasContentOffsets();
-        
-        // RelX/RelY are Dist From Canvas Border. Convert to Content.
-        const contentRelX = importState.relX - offsets.left;
-        const contentRelY = importState.relY - offsets.top;
+        const src = getSourceDimensions(previewImg);
+        sourceW = src.width;
+        sourceH = src.height;
+        if (sourceW > 0 && sourceH > 0) {
+            checkCoverage = true;
+            try {
+                const tc = document.createElement('canvas');
+                tc.width = sourceW;
+                tc.height = sourceH;
+                const tempCtx = tc.getContext('2d', { willReadFrequently: true });
+                tempCtx.drawImage(previewImg, 0, 0, sourceW, sourceH);
+                imgData = tempCtx.getImageData(0, 0, sourceW, sourceH);
 
-        imgInternalX = contentRelX * ratio;
-        imgInternalY = contentRelY * ratio;
-        imgInternalW = importState.width * ratio;
-        imgInternalH = importState.height * ratio;
-
-        // Create Temp Canvas to read image pixels
-        try {
-            const tc = document.createElement('canvas');
-            tc.width = previewImg.naturalWidth || previewImg.width;
-            tc.height = previewImg.naturalHeight || previewImg.height;
-            tempCtx = tc.getContext('2d', { willReadFrequently: true });
-            tempCtx.drawImage(previewImg, 0, 0);
-            imgData = tempCtx.getImageData(0, 0, tc.width, tc.height);
-            
-            imgRatioW = tc.width / imgInternalW; // Multiply internal-coord-dist by this to get image pixel coord
-            imgRatioH = tc.height / imgInternalH;
-        } catch(e) {
-            console.warn("Cannot read image data (CORS?):", e);
-            checkCoverage = false; // Fallback to overwrite all if image unreadable
+                const count = generatedQR ? generatedQR.getModuleCount() : pixelMap.length;
+                const totalModules = count + 2 * qrMargin;
+                if (basisMode) {
+                    const basisBox = getBasisQrBoxInternal();
+                    qrStartX = basisBox.x;
+                    qrStartY = basisBox.y;
+                    moduleW = basisBox.width / totalModules;
+                    moduleH = basisBox.height / totalModules;
+                    imageBoxX = 0;
+                    imageBoxY = 0;
+                    imageBoxW = canvas.width;
+                    imageBoxH = canvas.height;
+                } else {
+                    const displayW = parseFloat(canvas.style.width) || canvas.width;
+                    const displayH = parseFloat(canvas.style.height) || canvas.height;
+                    const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+                    qrStartX = 0;
+                    qrStartY = 0;
+                    moduleW = CELL_SIZE;
+                    moduleH = CELL_SIZE;
+                    imageBoxX = box.x;
+                    imageBoxY = box.y;
+                    imageBoxW = Math.max(1, box.width);
+                    imageBoxH = Math.max(1, box.height);
+                }
+            } catch (e) {
+                console.warn('Cannot read image data (CORS?):', e);
+                checkCoverage = false;
+            }
         }
     }
 
@@ -1432,27 +2025,18 @@ function setSuffixUniform(targetColor) { // targetColor: 0=White, 1=Black
     for(let r=0; r<len; r++) {
         for(let c=0; c<len; c++) {
             const cell = pixelMap[r][c];
-            if (cell && cell.type === 'data' && cell.globalBitIndex >= payloadStartBit) {
+            if (isEditableDataCell(cell)) {
                  
                  let effectiveTarget = targetColor;
                  let needsChange = true;
 
                  if (checkCoverage && imgData) {
-                     const x = (c+qrMargin)*CELL_SIZE;
-                     const y = (r+qrMargin)*CELL_SIZE;
-                     const modCX = x + CELL_SIZE/2;
-                     const modCY = y + CELL_SIZE/2;
-                     
-                     // Check if module center is inside image rect
-                     if (modCX >= imgInternalX && modCX <= imgInternalX + imgInternalW &&
-                         modCY >= imgInternalY && modCY <= imgInternalY + imgInternalH) {
-                         
-                         // Map to image pixel
-                         const ix = Math.floor((modCX - imgInternalX) * imgRatioW);
-                         const iy = Math.floor((modCY - imgInternalY) * imgRatioH);
-                         
-                         // Check Bounds
-                         if (ix >= 0 && iy >= 0 && ix < imgData.width && iy < imgData.height) {
+                     const modCX = qrStartX + (c + qrMargin) * moduleW + moduleW / 2;
+                     const modCY = qrStartY + (r + qrMargin) * moduleH + moduleH / 2;
+                            const ix = Math.floor(((modCX - imageBoxX) / imageBoxW) * sourceW);
+                            const iy = Math.floor(((modCY - imageBoxY) / imageBoxH) * sourceH);
+
+                     if (ix >= 0 && iy >= 0 && ix < imgData.width && iy < imgData.height) {
                              const idx = (iy * imgData.width + ix) * 4;
                              const rVal = imgData.data[idx];
                              const gVal = imgData.data[idx+1];
@@ -1466,7 +2050,6 @@ function setSuffixUniform(targetColor) { // targetColor: 0=White, 1=Black
                              const blendB = bVal * fA + bgVal * (1 - fA);
                              const luma = 0.299 * blendR + 0.587 * blendG + 0.114 * blendB;
                              effectiveTarget = (luma < BINARIZE_THRESHOLD) ? 1 : 0; 
-                         }
                      }
                  }
             
@@ -1534,6 +2117,18 @@ function updateQR() {
         return utf8.length * 8;
     };
 
+    const getMaxInputCountForV40 = (mode, budgetBits) => {
+        if (budgetBits <= 0) return 0;
+        if (mode === 'Byte') return Math.floor(budgetBits / 8);
+        let n = 0;
+        while (true) {
+            const testText = '0'.repeat(n + 1);
+            if (getBitLength(mode, testText) > budgetBits) break;
+            n += 1;
+        }
+        return n;
+    };
+
     // We need to fit User Text (Segment 1) + Suffix/Padding (Segment 2)
     // Suffix Payload: If UserText exists, assume "#" + 1 space. Else 1 space.
     // Lower overhead to prevent early version jump in Numeric mode.
@@ -1565,6 +2160,30 @@ function updateQR() {
              break;
         }
         if (v === 40) minVersion = 40;
+    }
+
+    const rsBlocks40 = qrcode.QRRSBlock.getRSBlocks(40, qrcode.QRErrorCorrectionLevel[eccLevel]);
+    let capacityBits40 = 0;
+    rsBlocks40.forEach((b) => { capacityBits40 += b.dataCount; });
+    capacityBits40 *= 8;
+    const seg1HeaderBits40 = (userText && userText.length > 0) ? (4 + getLengthBits(encodingMode, 40)) : 0;
+    const seg2FixedBits40 = 4 + getLengthBits('Byte', 40) + getBitLength('Byte', suffixStr) + (appendHash ? 8 : 0);
+    const budgetBits40 = capacityBits40 - seg1HeaderBits40 - seg2FixedBits40;
+    const totalBitsAt40 = seg1HeaderBits40 + ((userText && userText.length > 0) ? getBitLength(encodingMode, userText) : 0) + seg2FixedBits40;
+    const fitsAtV40 = totalBitsAt40 <= capacityBits40;
+    const maxCount40 = getMaxInputCountForV40(encodingMode, budgetBits40);
+    const currentCount = encodingMode === 'Byte'
+        ? unescape(encodeURIComponent(userText || '')).length
+        : (userText || '').length;
+
+    updateTextOverflowWarning({
+        exceeds: !fitsAtV40,
+        max: Math.max(0, maxCount40),
+        current: currentCount
+    });
+
+    if (!fitsAtV40) {
+        return;
     }
 
     // 2. Adjust Logic for Slider
@@ -1620,9 +2239,7 @@ function updateQR() {
     if (needRebuild) {
         buildPixelMap(typeNumber, eccLevel, tempMask);
         lastState = { ver: typeNumber, ecc: eccLevel, mask: tempMask }; // Temp state
-        if (!isImageBasisMode()) {
-            fitToScreen();
-        }
+        fitToScreen();
     }
     
     // Fill Suffix Buffer to Capacity
@@ -1727,6 +2344,8 @@ function updateQR() {
     writeBufferBits(prefixBuffer, currentSuffixBytes);
     
     payloadStartBit = prefixBuffer.getLengthInBits();
+    const editableSuffixBytes = Math.max(0, maxPayloadBytes - (hasSeparator ? 1 : 0));
+    payloadEditableEndBit = Math.min(totalDataBits, payloadStartBit + editableSuffixBytes * 8);
     
     // RENDER
     // Reconstruct Suffix String to pass to Lib
@@ -1823,9 +2442,8 @@ function renderQR(isExport, imageOverride) {
     let canvasW = baseSize;
     let canvasH = baseSize;
     if (basisMode && imageReady) {
-        // Keep image at its true pixel size in image-basis mode.
-        canvasW = srcDim.width;
-        canvasH = srcDim.height;
+        canvasW = baseSize;
+        canvasH = Math.max(1, Math.round(baseSize * (srcDim.height / srcDim.width)));
     }
 
     canvas.width = canvasW;
@@ -1901,6 +2519,18 @@ function renderQR(isExport, imageOverride) {
     const moduleW = qrW / (count + 2 * qrMargin);
     const moduleH = qrH / (count + 2 * qrMargin);
 
+    const isFormatInfo = (rr, cc) => {
+        if (rr === count - 8 && cc === 8) return true;
+        if (cc === 8 && rr < 9) return true;
+        if (cc === 8 && rr >= count - 8) return true;
+        if (rr === 8 && cc < 9) return true;
+        if (rr === 8 && cc >= count - 8) return true;
+        return false;
+    };
+
+    const finalDark = Array.from({ length: count }, () => Array(count).fill(false));
+    const finalStyle = Array.from({ length: count }, () => Array(count).fill('square'));
+
     for (let r = 0; r < count; r++) {
         for (let c = 0; c < count; c++) {
             let isDark = generatedQR.isDark(r, c);
@@ -1911,17 +2541,11 @@ function renderQR(isExport, imageOverride) {
                 isDark = isDark ^ (cell.maskVal === 1);
             }
 
-            const isFormatInfo = (rr, cc) => {
-                if (rr === count - 8 && cc === 8) return true;
-                if (cc === 8 && rr < 9) return true;
-                if (cc === 8 && rr >= count - 8) return true;
-                if (rr === 8 && cc < 9) return true;
-                if (rr === 8 && cc >= count - 8) return true;
-                return false;
-            };
-
             const x = qrOriginX + (c + qrMargin) * moduleW;
             const y = qrOriginY + (r + qrMargin) * moduleH;
+            const isFinder = isFinderCell(r, c, count);
+            const isAlign = !!getAlignLocalCoord(r, c, count);
+            const activeStyle = (isFinder || isAlign) ? finderStyle : moduleStyle;
 
             if (artisticMode && offData && cell && cell.type === 'ec' && !isFormatInfo(r, c)) {
                 const cx = Math.floor(x + moduleW / 2);
@@ -1947,6 +2571,48 @@ function renderQR(isExport, imageOverride) {
                 const val = drawnPixels.get(`${r},${c}`);
                 if (val === 1) isDark = true;
                 if (val === 0) isDark = false;
+            }
+
+            if (cell && cell.type === 'func' && (isFinder || isAlign)) {
+                const override = getFinderAlignOverride(finderStyle, r, c, count);
+                if (override !== null) isDark = override;
+            }
+
+            finalDark[r][c] = isDark;
+            finalStyle[r][c] = activeStyle;
+        }
+    }
+
+    for (let r = 0; r < count; r++) {
+        for (let c = 0; c < count; c++) {
+            const cell = pixelMap[r] ? pixelMap[r][c] : null;
+            const isDark = finalDark[r][c];
+            const activeStyle = finalStyle[r][c];
+            const x = qrOriginX + (c + qrMargin) * moduleW;
+            const y = qrOriginY + (r + qrMargin) * moduleH;
+            const isFinder = isFinderCell(r, c, count);
+            const isAlign = !!getAlignLocalCoord(r, c, count);
+            const deferCircleFinder = (
+                finderStyle === 'circle' &&
+                cell &&
+                cell.type === 'func' &&
+                (isFinder || isAlign)
+            );
+
+            if (deferCircleFinder) {
+                if (!isExport && cell) {
+                    if (cell.type === 'func') {
+                        ctx.fillStyle = 'rgba(128, 128, 128, 0.4)';
+                        ctx.fillRect(x, y, moduleW, moduleH);
+                    } else if (cell.type === 'ec') {
+                        ctx.fillStyle = 'rgba(0, 0, 255, 0.2)';
+                        ctx.fillRect(x, y, moduleW, moduleH);
+                    } else if (cell.type === 'data' && !isEditableDataCell(cell)) {
+                        ctx.fillStyle = 'rgba(255, 235, 59, 0.3)';
+                        ctx.fillRect(x, y, moduleW, moduleH);
+                    }
+                }
+                continue;
             }
 
             let covered = false;
@@ -2005,8 +2671,14 @@ function renderQR(isExport, imageOverride) {
                 }
 
                 if (isTransparent) {
-                    ctx.fillStyle = isDark ? rgbaFromHex(fgColor, 0.85) : rgbaFromHex(bgColor, 0.85);
-                    ctx.fillRect(x + offsetX, y + offsetY, smallSize, smallSize);
+                    drawStyledModule(
+                        x + offsetX,
+                        y + offsetY,
+                        smallSize,
+                        smallSize,
+                        activeStyle,
+                        isDark ? rgbaFromHex(fgColor, 0.85) : rgbaFromHex(bgColor, 0.85)
+                    );
                 } else {
                     let alpha = 0.3;
                     let shouldDraw = false;
@@ -2016,8 +2688,14 @@ function renderQR(isExport, imageOverride) {
                             alpha = Math.max(0, Math.min(1, 1 - (0.25 / lum)));
                         }
                         if (shouldDraw) {
-                            ctx.fillStyle = rgbaFromHex(fgColor, alpha.toFixed(2));
-                            ctx.fillRect(x + offsetX, y + offsetY, smallSize, smallSize);
+                            drawStyledModule(
+                                x + offsetX,
+                                y + offsetY,
+                                smallSize,
+                                smallSize,
+                                activeStyle,
+                                rgbaFromHex(fgColor, alpha.toFixed(2))
+                            );
                         }
                     } else {
                         if (lum <= 0.80) {
@@ -2026,14 +2704,32 @@ function renderQR(isExport, imageOverride) {
                             alpha = Math.max(0, Math.min(1, alpha));
                         }
                         if (shouldDraw) {
-                            ctx.fillStyle = rgbaFromHex(bgColor, alpha.toFixed(2));
-                            ctx.fillRect(x + offsetX, y + offsetY, smallSize, smallSize);
+                            drawStyledModule(
+                                x + offsetX,
+                                y + offsetY,
+                                smallSize,
+                                smallSize,
+                                activeStyle,
+                                rgbaFromHex(bgColor, alpha.toFixed(2))
+                            );
                         }
                     }
                 }
+            } else if (activeStyle === 'liquid' && isDark) {
+                const up = r > 0 && finalDark[r - 1][c] && finalStyle[r - 1][c] === 'liquid';
+                const right = c < count - 1 && finalDark[r][c + 1] && finalStyle[r][c + 1] === 'liquid';
+                const down = r < count - 1 && finalDark[r + 1][c] && finalStyle[r + 1][c] === 'liquid';
+                const left = c > 0 && finalDark[r][c - 1] && finalStyle[r][c - 1] === 'liquid';
+                const upLeft = r > 0 && c > 0 && finalDark[r - 1][c - 1] && finalStyle[r - 1][c - 1] === 'liquid';
+                const upRight = r > 0 && c < count - 1 && finalDark[r - 1][c + 1] && finalStyle[r - 1][c + 1] === 'liquid';
+                const downLeft = r < count - 1 && c > 0 && finalDark[r + 1][c - 1] && finalStyle[r + 1][c - 1] === 'liquid';
+                const downRight = r < count - 1 && c < count - 1 && finalDark[r + 1][c + 1] && finalStyle[r + 1][c + 1] === 'liquid';
+                drawLiquidConnectedModule(ctx, x, y, moduleW, moduleH, fgColor, {
+                    up, right, down, left,
+                    upLeft, upRight, downLeft, downRight
+                }, bgColor);
             } else {
-                ctx.fillStyle = isDark ? fgColor : bgColor;
-                ctx.fillRect(x, y, moduleW, moduleH);
+                drawStyledModule(x, y, moduleW, moduleH, activeStyle, isDark ? fgColor : bgColor);
             }
 
             if (!isExport && cell) {
@@ -2043,7 +2739,7 @@ function renderQR(isExport, imageOverride) {
                 } else if (cell.type === 'ec') {
                     ctx.fillStyle = 'rgba(0, 0, 255, 0.2)';
                     ctx.fillRect(x, y, moduleW, moduleH);
-                } else if (cell.type === 'data' && cell.globalBitIndex < payloadStartBit) {
+                } else if (cell.type === 'data' && !isEditableDataCell(cell)) {
                     ctx.fillStyle = 'rgba(255, 235, 59, 0.3)';
                     ctx.fillRect(x, y, moduleW, moduleH);
                 }
@@ -2051,8 +2747,8 @@ function renderQR(isExport, imageOverride) {
         }
     }
 
-    if (basisMode) {
-        updateAutoCellSizeButtonLabel();
+    if (finderStyle === 'circle') {
+        drawCircleFinderStyle(ctx, count, qrOriginX, qrOriginY, moduleW, moduleH, fgColor, bgColor);
     }
 }
 
@@ -2120,8 +2816,7 @@ function plotLine(r0, c0, r1, c1, color) {
 function modifyPixel(r, c, targetColor) {
     if (!pixelMap || r<0 || c<0 || r>=pixelMap.length || c>=pixelMap.length) return;
     const cell = pixelMap[r][c];
-    if (!cell || cell.type !== 'data') return;
-    if (cell.globalBitIndex < payloadStartBit) return; // Protected
+    if (!isEditableDataCell(cell)) return;
 
     const maskBit = (maskPattern === -2) ? 0 : cell.maskVal;
     // targetColor (1=Black, 0=White)
@@ -2655,6 +3350,7 @@ async function handleImageUpload(e) {
         }
 
         hasImageUpload = true;
+        refreshImageSizeControlVisibility();
         lockAutoMaskIfNeeded();
         
         startImportMode(previewImg.naturalWidth, previewImg.naturalHeight);
@@ -2677,6 +3373,7 @@ function startImportMode(natW, natH) {
     initImportOverlayByMode(natW, natH);
     updateOverlayVisibility();
     updateOverlayTransform();
+    syncImageSizeInputs();
     
     // Force hide buttons (Requested by user)
     document.getElementById('import-ok').style.display = 'none';
@@ -2692,6 +3389,7 @@ function updateOverlayTransform() {
     importOverlay.classList.toggle('image-basis', basis);
     if (previewImg) previewImg.style.display = basis ? 'none' : 'block';
     updateAutoCellSizeButtonLabel();
+    syncImageSizeInputs();
 }
 
 function updateOverlayVisibility() {
@@ -2784,6 +3482,7 @@ function clearImportedImage() {
     fileInput.value = '';
     uploadInfo = { mime: null, name: null, isGif: false, isAnimated: false, animatedType: null, gifFrames: null, gifFullFrames: null, gifWidth: 0, gifHeight: 0, gifBuffer: null };
     hasImageUpload = false;
+    refreshImageSizeControlVisibility();
     stopGifPreview();
     if (embedImageCb) {
         embedImageCb.checked = false;
@@ -2817,11 +3516,6 @@ function startImportDrag(e) {
         importState.startX = importState.x;
         importState.startY = importState.y;
         importState.aspect = importState.width / importState.height;
-        const handle = importState.resizeHandle;
-        const hasW = handle.includes('w');
-        const hasN = handle.includes('n');
-        importState.resizeAnchorX = hasW ? (importState.x + importState.width) : importState.x;
-        importState.resizeAnchorY = hasN ? (importState.y + importState.height) : importState.y;
         importState.lastMoveDx = 0;
         importState.lastMoveDy = 0;
         importState.dragGrabOffsetX = importState.width / 2;
@@ -2876,7 +3570,6 @@ function moveImportDrag(e) {
         let newY = importState.y;
         let newW = importState.width;
         let newH = importState.height;
-        const minSize = 20;
         
         // Edge Resizing (Free)
         if (!isCorner) {
@@ -2887,68 +3580,53 @@ function moveImportDrag(e) {
         } 
         // Corner Resizing (Fixed Aspect)
         else {
-            const wrapperRect = canvasWrapper.getBoundingClientRect();
-            const pointerX = (e.clientX - wrapperRect.left) + canvasWrapper.scrollLeft;
-            const pointerY = (e.clientY - wrapperRect.top) + canvasWrapper.scrollTop;
-            const hasW = h.includes('w');
-            const hasN = h.includes('n');
-            const hasE = h.includes('e');
-            const hasS = h.includes('s');
-
-            const anchorX = Number.isFinite(importState.resizeAnchorX)
-                ? importState.resizeAnchorX
-                : (hasW ? importState.x + importState.width : importState.x);
-            const anchorY = Number.isFinite(importState.resizeAnchorY)
-                ? importState.resizeAnchorY
-                : (hasN ? importState.y + importState.height : importState.y);
-
-            const rawW = hasE ? (pointerX - anchorX) : (anchorX - pointerX);
-            const rawH = hasS ? (pointerY - anchorY) : (anchorY - pointerY);
-            const wFromX = Math.max(minSize, rawW);
-            const hFromX = Math.max(minSize, wFromX / importState.aspect);
-            const hFromY = Math.max(minSize, rawH);
-            const wFromY = Math.max(minSize, hFromY * importState.aspect);
-
-            const cornerXFromX = hasE ? (anchorX + wFromX) : (anchorX - wFromX);
-            const cornerYFromX = hasS ? (anchorY + hFromX) : (anchorY - hFromX);
-            const cornerXFromY = hasE ? (anchorX + wFromY) : (anchorX - wFromY);
-            const cornerYFromY = hasS ? (anchorY + hFromY) : (anchorY - hFromY);
-
-            const minYFromX = Math.min(anchorY, cornerYFromX);
-            const maxYFromX = Math.max(anchorY, cornerYFromX);
-            const minXFromY = Math.min(anchorX, cornerXFromY);
-            const maxXFromY = Math.max(anchorX, cornerXFromY);
-
-            // 必须是真正“贴边线段”，而不是只靠近某个角点。
-            const xTouch = (Math.abs(rawW - wFromX) < 1e-6) && (pointerY >= minYFromX && pointerY <= maxYFromX);
-            const yTouch = (Math.abs(rawH - hFromY) < 1e-6) && (pointerX >= minXFromY && pointerX <= maxXFromY);
-
-            const distSqX = (cornerXFromX - pointerX) * (cornerXFromX - pointerX)
-                + (cornerYFromX - pointerY) * (cornerYFromX - pointerY);
-            const distSqY = (cornerXFromY - pointerX) * (cornerXFromY - pointerX)
-                + (cornerYFromY - pointerY) * (cornerYFromY - pointerY);
-
-            if (xTouch && !yTouch) {
-                newW = wFromX;
-                newH = hFromX;
-            } else if (yTouch && !xTouch) {
-                newW = wFromY;
-                newH = hFromY;
-            } else if (distSqX <= distSqY) {
-                newW = wFromX;
-                newH = hFromX;
-            } else {
-                newW = wFromY;
-                newH = hFromY;
+            const dominantX = Math.abs(dx) >= Math.abs(dy);
+            if (h === 'se') {
+                if (dominantX) {
+                    newW += dx;
+                    newH = newW / importState.aspect;
+                } else {
+                    newH += dy;
+                    newW = newH * importState.aspect;
+                }
+            } else if (h === 'sw') {
+                if (dominantX) {
+                    newW -= dx;
+                    newX += dx;
+                    newH = newW / importState.aspect;
+                } else {
+                    newH += dy;
+                    newW = newH * importState.aspect;
+                    newX = importState.x + (importState.width - newW);
+                }
+            } else if (h === 'ne') {
+                if (dominantX) {
+                    newW += dx;
+                    newH = newW / importState.aspect;
+                    newY = importState.y + (importState.height - newH);
+                } else {
+                    newH -= dy;
+                    newY += dy;
+                    newW = newH * importState.aspect;
+                }
+            } else if (h === 'nw') {
+                if (dominantX) {
+                    newW -= dx;
+                    newX += dx;
+                    newH = newW / importState.aspect;
+                    newY = importState.y + (importState.height - newH);
+                } else {
+                    newH -= dy;
+                    newY += dy;
+                    newW = newH * importState.aspect;
+                    newX = importState.x + (importState.width - newW);
+                }
             }
-
-            newX = hasE ? anchorX : (anchorX - newW);
-            newY = hasS ? anchorY : (anchorY - newH);
         }
         
         // Minimum size limit
-        if (newW < minSize) newW = minSize;
-        if (newH < minSize) newH = minSize;
+        if (newW < 20) newW = 20;
+        if (newH < 20) newH = 20;
 
         importState.width = newW;
         importState.height = newH;
@@ -2998,8 +3676,6 @@ function endImportDrag() {
     importState.isDragging = false;
     importState.isResizing = false;
     importState.resizeHandle = null;
-    importState.resizeAnchorX = undefined;
-    importState.resizeAnchorY = undefined;
     importState.lastMoveDx = 0;
     importState.lastMoveDy = 0;
     clearDeleteZones();
@@ -3068,31 +3744,33 @@ function applyImport(doSave = true, imageSource = previewImg) {
 
     const qrSize = pixelMap.length;
     const totalModulesVisual = qrSize + 2 * qrMargin;
-    const style = window.getComputedStyle(canvas);
-    const borderLeft = parseFloat(style.borderLeftWidth) || 0;
-    const borderRight = parseFloat(style.borderRightWidth) || 0;
-    const borderTop = parseFloat(style.borderTopWidth) || 0;
-    const borderBottom = parseFloat(style.borderBottomWidth) || 0;
-    const paddingLeft = parseFloat(style.paddingLeft) || 0;
-    const paddingRight = parseFloat(style.paddingRight) || 0;
-    const paddingTop = parseFloat(style.paddingTop) || 0;
-    const paddingBottom = parseFloat(style.paddingBottom) || 0;
-    const visualContentWidth = canvasRect.width - borderLeft - borderRight - paddingLeft - paddingRight;
-    const visualContentHeight = canvasRect.height - borderTop - borderBottom - paddingTop - paddingBottom;
-
     let qrStartX = 0;
     let qrStartY = 0;
-    let moduleW = visualContentWidth / totalModulesVisual;
-    let moduleH = visualContentWidth / totalModulesVisual;
+    let moduleW = CELL_SIZE;
+    let moduleH = CELL_SIZE;
+    let imageBoxX = 0;
+    let imageBoxY = 0;
+    let imageBoxW = Math.max(1, canvas.width);
+    let imageBoxH = Math.max(1, canvas.height);
 
     if (basisMode) {
-        const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, canvasRect.width, canvasRect.height);
-        const scaleX = canvasRect.width / canvas.width;
-        const scaleY = canvasRect.height / canvas.height;
-        qrStartX = box.x * scaleX;
-        qrStartY = box.y * scaleY;
-        moduleW = (box.width * scaleX) / totalModulesVisual;
-        moduleH = (box.height * scaleY) / totalModulesVisual;
+        const basisBox = getBasisQrBoxInternal();
+        qrStartX = basisBox.x;
+        qrStartY = basisBox.y;
+        moduleW = basisBox.width / totalModulesVisual;
+        moduleH = basisBox.height / totalModulesVisual;
+        imageBoxX = 0;
+        imageBoxY = 0;
+        imageBoxW = Math.max(1, canvas.width);
+        imageBoxH = Math.max(1, canvas.height);
+    } else {
+        const displayW = parseFloat(canvas.style.width) || canvas.width;
+        const displayH = parseFloat(canvas.style.height) || canvas.height;
+        const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+        imageBoxX = box.x;
+        imageBoxY = box.y;
+        imageBoxW = Math.max(1, box.width);
+        imageBoxH = Math.max(1, box.height);
     }
 
     let changed = false;
@@ -3101,28 +3779,15 @@ function applyImport(doSave = true, imageSource = previewImg) {
         for (let c = 0; c < qrSize; c++) {
             const cell = pixelMap[r][c];
             // Only affect Valid Free Suffix Data
-            if (cell && cell.type === 'data' && cell.globalBitIndex >= payloadStartBit) {
+            if (isEditableDataCell(cell)) {
                 const cx = qrStartX + (c + qrMargin) * moduleW + (moduleW / 2);
                 const cy = qrStartY + (r + qrMargin) * moduleH + (moduleH / 2);
 
                 let localX = -1;
                 let localY = -1;
 
-                if (basisMode) {
-                    localX = Math.floor((cx / canvasRect.width) * sourceW);
-                    localY = Math.floor((cy / canvasRect.height) * sourceH);
-                } else {
-                    const offsets = getCanvasContentOffsets();
-                    const ovStyle = window.getComputedStyle(importOverlay);
-                    const ovBorderLeft = parseFloat(ovStyle.borderLeftWidth) || 0;
-                    const ovBorderTop = parseFloat(ovStyle.borderTopWidth) || 0;
-                    const imageRelX = importState.relX - offsets.left + ovBorderLeft;
-                    const imageRelY = importState.relY - offsets.top + ovBorderTop;
-                    const scaleX = sourceW / Math.max(1, importState.width);
-                    const scaleY = sourceH / Math.max(1, importState.height);
-                    localX = Math.floor((cx - imageRelX) * scaleX);
-                    localY = Math.floor((cy - imageRelY) * scaleY);
-                }
+                localX = Math.floor(((cx - imageBoxX) / imageBoxW) * sourceW);
+                localY = Math.floor(((cy - imageBoxY) / imageBoxH) * sourceH);
 
                 if (localX >= 0 && localX < sourceW && localY >= 0 && localY < sourceH) {
                     const idx = (localY * sourceW + localX) * 4;
