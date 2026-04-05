@@ -682,9 +682,13 @@ function scaleBasisScene(scale) {
     syncCellSizeFromBasisBox();
 }
 
-function syncCellSizeFromBasisBox() {
-    if (!isImageBasisMode() || !generatedQR || !importState.active) return;
-    const modules = generatedQR.getModuleCount() + 2 * qrMargin;
+function syncCellSizeFromBasisBox(moduleCountOverride) {
+    if (!isImageBasisMode() || !importState.active) return;
+    const qrModules = Number.isFinite(moduleCountOverride)
+        ? moduleCountOverride
+        : (generatedQR ? generatedQR.getModuleCount() : 0);
+    if (qrModules <= 0) return;
+    const modules = qrModules + 2 * qrMargin;
     if (modules <= 0) return;
     const box = getBasisQrBoxInternal();
     const next = Math.max(0.1, Math.round((Math.min(box.width, box.height) / modules) * 10) / 10);
@@ -2305,6 +2309,11 @@ function updateQR() {
     if (typeNumber === 0) {
         typeNumber = minVersion;
     }
+
+    if (isImageBasisMode() && importState.active) {
+        const basisCount = typeNumber * 4 + 17;
+        syncCellSizeFromBasisBox(basisCount);
+    }
     
     // Check if verDisplay exists logic replaced:
     const vInput = document.getElementById('version-input');
@@ -2334,7 +2343,9 @@ function updateQR() {
     if (needRebuild) {
         buildPixelMap(typeNumber, eccLevel, tempMask);
         lastState = { ver: typeNumber, ecc: eccLevel, mask: tempMask }; // Temp state
-        fitToScreen();
+        if (!isImageBasisMode()) {
+            fitToScreen();
+        }
     }
     
     // Fill Suffix Buffer to Capacity
