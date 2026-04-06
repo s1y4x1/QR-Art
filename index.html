@@ -17,6 +17,7 @@
             <div class="control-group">
                 <label>文本内容:</label>
                 <textarea id="text-input" rows="3">Hello World</textarea>
+                <div id="encoding-warning" class="encoding-warning" style="display:none;"></div>
                 <div id="text-overflow-warning" class="text-overflow-warning" style="display:none;"></div>
                 <label class="inline-check">
                     <input type="checkbox" id="append-hash" checked>
@@ -46,8 +47,9 @@
             <div class="control-group full-width" style="margin-top: 5px;">
                 <label style="display:flex; align-items:center;">
                     <input type="checkbox" id="artistic-mode" style="width: auto; margin-right: 8px;"> 
-                    利用容错 (强制填充背景)
+                    利用纠错码区
                 </label>
+                <div id="artistic-warning" class="artistic-warning" style="display: none;"></div>
             </div>
 
             <div class="control-group hz-layout">
