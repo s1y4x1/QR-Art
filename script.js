@@ -5,7 +5,7 @@ let version = parseInt(document.getElementById('version-range').value) || 0;
 let maskPattern = -1; // -1 for auto
 let encodingMode = document.getElementById('encoding-mode').value;
 const BINARIZE_THRESHOLD = 128;
-let appendHash = true;
+let appendHash = false;
 let bestAutoMask = 0;
 let lastManualMask = 0;
 
@@ -314,6 +314,12 @@ const textInput = document.getElementById('text-input');
 const encodingWarning = document.getElementById('encoding-warning');
 const textOverflowWarning = document.getElementById('text-overflow-warning');
 const artisticWarning = document.getElementById('artistic-warning');
+const computeOverlay = document.getElementById('compute-overlay');
+const computeTitle = document.getElementById('compute-title');
+const computeSubtitle = document.getElementById('compute-subtitle');
+const computeProgressBar = document.getElementById('compute-progress-bar');
+const computeProgressText = document.getElementById('compute-progress-text');
+const computeCancelBtn = document.getElementById('compute-cancel-btn');
 const eccSelect = document.getElementById('ecc-level');
 const verRange = document.getElementById('version-range');
 const verDisplay = document.getElementById('version-display');
@@ -328,14 +334,17 @@ const fgColorInput = document.getElementById('fg-color');
 const bgColorInput = document.getElementById('bg-color');
 const fgColorHexInput = document.getElementById('fg-color-hex');
 const bgColorHexInput = document.getElementById('bg-color-hex');
-const appendHashCb = document.getElementById('append-hash');
 const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
 const artisticModeCb = document.getElementById('artistic-mode');
+const allowCoveredFreedomCb = document.getElementById('allow-covered-freedom');
 const moduleStyleSelect = document.getElementById('module-style');
 const finderStyleSelect = document.getElementById('finder-style');
+const moduleStyleSummary = document.getElementById('module-style-summary');
+const finderStyleSummary = document.getElementById('finder-style-summary');
+const maskModeSummary = document.getElementById('mask-mode-summary');
 const moduleStyleButtons = document.querySelectorAll('.style-btn[data-style-target="module"]');
 const finderStyleButtons = document.querySelectorAll('.style-btn[data-style-target="finder"]');
 const imageSizeGroup = document.getElementById('image-size-group');
@@ -351,6 +360,9 @@ let lastNonBasisImportRect = null;
 let basisImageWidth = 0;
 let basisImageHeight = 0;
 let lastArtisticSolveStats = null;
+let computeCancelRequested = false;
+let qrComputeRunId = 0;
+let padFreedomModeActive = false;
 
 function isImageBasisMode() {
     return !!(imageBasisCb && !imageBasisCb.disabled && imageBasisCb.checked && hasImageUpload);
@@ -448,8 +460,24 @@ const ALIGN_POLAR_5 = [
     [null, null, 1, null, null]
 ];
 
+function isAuroraCrossBit(localX, localY, size) {
+    const mid = Math.floor(size / 2);
+    return localX === mid || localY === mid;
+}
+
+function isAuroraWhiteNotch(localX, localY, size) {
+    const mid = Math.floor(size / 2);
+    if (localY === mid && (localX === 1 || localX === size - 2)) return true;
+    if (localX === mid && (localY === 1 || localY === size - 2)) return true;
+    return false;
+}
+
 function getStyledFinderBit(style, localX, localY, size) {
     if (style === 'classic') return null;
+    if (style === 'aurora') {
+        if (!isAuroraCrossBit(localX, localY, size)) return false;
+        return !isAuroraWhiteNotch(localX, localY, size);
+    }
     if (size === 7) {
         if (style === 'circle') return FINDER_CIRCLE_7[localY][localX] === 1;
         const v = FINDER_POLAR_7[localY][localX];
@@ -487,6 +515,18 @@ function getFinderAlignOverride(style, r, c, count) {
     }
 
     return null;
+}
+
+function isFinderAlignTransparentCell(style, r, c, count) {
+    if (style !== 'aurora') return false;
+
+    const finderLocal = getFinderLocalCoord(r, c, count);
+    if (finderLocal) return !isAuroraCrossBit(finderLocal.x, finderLocal.y, 7);
+
+    const alignLocal = getAlignLocalCoord(r, c, count);
+    if (alignLocal) return !isAuroraCrossBit(alignLocal.x, alignLocal.y, 5);
+
+    return false;
 }
 
 function drawRoundedRectPath(drawCtx, x, y, w, h, radii) {
@@ -895,6 +935,10 @@ function init() {
         artisticModeCb.checked = false;
         artisticModeCb.disabled = true;
     }
+    if (allowCoveredFreedomCb) {
+        allowCoveredFreedomCb.checked = false;
+        allowCoveredFreedomCb.disabled = true;
+    }
 
     if (imageBasisCb) {
         imageBasisCb.disabled = true;
@@ -963,6 +1007,7 @@ function init() {
         moduleStyleSelect.addEventListener('change', () => {
             moduleStyle = moduleStyleSelect.value;
             syncStyleButtonState('module');
+            updateOptionSummaries();
             renderQR(false);
         });
     }
@@ -972,6 +1017,7 @@ function init() {
         finderStyleSelect.addEventListener('change', () => {
             finderStyle = finderStyleSelect.value;
             syncStyleButtonState('finder');
+            updateOptionSummaries();
             renderQR(false);
         });
     }
@@ -1120,33 +1166,27 @@ function init() {
         });
     }
 
-    if (appendHashCb) {
-        appendHash = appendHashCb.checked;
-        appendHashCb.addEventListener('change', () => {
-            appendHash = appendHashCb.checked;
-            resetSuffix();
-            updateQR();
-        });
-    }
-
-    textInput.addEventListener('input', (e) => {
+    textInput.addEventListener('input', async (e) => {
         userText = e.target.value;
         // On text change, we keep suffix bytes if possible?
         // No, size changes, validation changes. Clear suffix.
         resetSuffix();
-        updateQR();
-    });
-    
-    eccSelect.addEventListener('change', (e) => {
-        eccLevel = e.target.value;
-        resetSuffix();
-        updateQR();
         if (hasImageUpload && importState.active) {
-            applyImport(false);
+            await updateQR({ skipArtisticPass: true });
+            await refitImageAfterQrUpdate(true);
+        } else {
+            await updateQR();
         }
     });
     
-    verRange.addEventListener('input', (e) => {
+    eccSelect.addEventListener('change', async (e) => {
+        eccLevel = e.target.value;
+        resetSuffix();
+        await updateQR({ skipArtisticPass: true });
+        await refitImageAfterQrUpdate(true);
+    });
+    
+    verRange.addEventListener('input', async (e) => {
         let val = parseInt(e.target.value);
         if (val < 0) val = 0;
         if (val > 40) val = 40;
@@ -1158,13 +1198,14 @@ function init() {
 
         // verDisplay.textContent = version === 0 ? "鑷姩" : version; // Removed span
         resetSuffix();
-        updateQR();
+        await updateQR({ skipArtisticPass: true });
+        await refitImageAfterQrUpdate(true);
     });
 
     // Version Input Box Listener
     const verInput = document.getElementById('version-input');
     if (verInput) {
-        verInput.addEventListener('change', (e) => {
+        verInput.addEventListener('change', async (e) => {
             let val = parseInt(e.target.value);
             if (isNaN(val) || val < 0) val = 0;
             if (val > 40) val = 40;
@@ -1175,16 +1216,22 @@ function init() {
             verRange.value = val;
             
             resetSuffix();
-            updateQR();
+            await updateQR({ skipArtisticPass: true });
+            await refitImageAfterQrUpdate(true);
         });
     }
 
     setupMaskButtons();
 
-    encodingSelect.addEventListener('change', (e) => {
+    encodingSelect.addEventListener('change', async (e) => {
         encodingMode = e.target.value;
         resetSuffix();
-        updateQR();
+        if (hasImageUpload && importState.active) {
+            await updateQR({ skipArtisticPass: true });
+            await refitImageAfterQrUpdate(true);
+        } else {
+            await updateQR();
+        }
     });
 
     const embedCb = document.getElementById('embed-image-cb');
@@ -1234,6 +1281,10 @@ function init() {
              if (artisticModeCb) {
                  artisticModeCb.checked = false;
                  artisticModeCb.disabled = true;
+             }
+             if (allowCoveredFreedomCb) {
+                 allowCoveredFreedomCb.checked = false;
+                 allowCoveredFreedomCb.disabled = true;
              }
              if (cellSizeAutoBtn) {
                  cellSizeAutoBtn.style.display = 'none';
@@ -1290,7 +1341,28 @@ function init() {
     const artCheck = document.getElementById('artistic-mode');
     if(artCheck) {
         artCheck.addEventListener('change', () => {
+             if (allowCoveredFreedomCb) {
+                 allowCoveredFreedomCb.disabled = !artCheck.checked;
+                 if (!artCheck.checked) allowCoveredFreedomCb.checked = false;
+             }
              updateQR();
+        });
+    }
+
+    if (allowCoveredFreedomCb) {
+        allowCoveredFreedomCb.addEventListener('change', async () => {
+            resetSuffix();
+            await updateQR({ skipArtisticPass: true });
+            await refitImageAfterQrUpdate(true);
+        });
+    }
+
+    if (computeCancelBtn) {
+        computeCancelBtn.addEventListener('click', () => {
+            computeCancelRequested = true;
+            qrComputeRunId += 1;
+            if (computeSubtitle) computeSubtitle.textContent = '正在取消...';
+            hideComputeOverlay();
         });
     }
 
@@ -1338,6 +1410,7 @@ function init() {
     syncStyleButtonState('module');
     syncStyleButtonState('finder');
     updateMaskControls();
+    updateOptionSummaries();
     refreshImageSizeControlVisibility();
     syncHexInputs();
 }
@@ -1515,6 +1588,7 @@ function updateMaskControls() {
             btn.classList.toggle('active', val === maskPattern);
         });
     }
+    updateOptionSummaries();
 }
 
 function applyOriginalImageSize() {
@@ -1590,14 +1664,15 @@ function restoreImportOverlayToNaturalSize() {
     syncImageSizeInputs();
 }
 
-function setMaskPattern(nextMask) {
+async function setMaskPattern(nextMask) {
     if (nextMask === -1 && !canUseAutoMask()) return;
     if (nextMask !== -1) lastManualMask = nextMask;
     maskPattern = nextMask;
     if (hasImageUpload && importState.active) {
-        applyImport(false);
+        await updateQR({ skipArtisticPass: true });
+        applyImport(false, previewImg, true);
     } else {
-        updateQR();
+        await updateQR();
     }
     updateMaskControls();
 }
@@ -1804,6 +1879,40 @@ function syncStyleButtonState(target) {
     });
 }
 
+function getModuleStyleLabel(style) {
+    const map = {
+        square: '方块',
+        rounded: '圆角',
+        circle: '圆点',
+        diamond: '菱形',
+        liquid: '液态'
+    };
+    return map[style] || '方块';
+}
+
+function getFinderStyleLabel(style) {
+    const map = {
+        classic: '经典',
+        circle: '圆形',
+        'polar-day': '极昼',
+        'polar-night': '极夜',
+        aurora: '极光'
+    };
+    return map[style] || '经典';
+}
+
+function getMaskModeLabel() {
+    if (maskPattern === -1) return `自动（${bestAutoMask}）`;
+    if (maskPattern === -2) return '无（展示掩码前）';
+    return `掩码 ${maskPattern}`;
+}
+
+function updateOptionSummaries() {
+    if (moduleStyleSummary) moduleStyleSummary.textContent = `${getModuleStyleLabel(moduleStyle)}`;
+    if (finderStyleSummary) finderStyleSummary.textContent = `${getFinderStyleLabel(finderStyle)}`;
+    if (maskModeSummary) maskModeSummary.textContent = `${getMaskModeLabel()}`;
+}
+
 function setupStyleGalleryButtons() {
     if (moduleStyleButtons) {
         moduleStyleButtons.forEach((btn) => {
@@ -1811,6 +1920,7 @@ function setupStyleGalleryButtons() {
                 moduleStyle = btn.dataset.style || 'square';
                 if (moduleStyleSelect) moduleStyleSelect.value = moduleStyle;
                 syncStyleButtonState('module');
+                updateOptionSummaries();
                 renderQR(false);
             });
         });
@@ -1821,6 +1931,7 @@ function setupStyleGalleryButtons() {
                 finderStyle = btn.dataset.style || 'classic';
                 if (finderStyleSelect) finderStyleSelect.value = finderStyle;
                 syncStyleButtonState('finder');
+                updateOptionSummaries();
                 renderQR(false);
             });
         });
@@ -1917,15 +2028,49 @@ function updateEncodingWarning(message) {
     encodingWarning.textContent = message;
 }
 
+async function refitImageAfterQrUpdate(forceRecalc = false) {
+    if (hasImageUpload && importState.active) {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+        applyImport(false, previewImg, forceRecalc);
+    }
+}
+
 function updateArtisticWarning(stats) {
     if (!artisticWarning) return;
-    if (!stats || !stats.hasTargets || stats.remainingMismatch <= 0 || !stats.coverageLimited) {
+    if (!stats || !stats.hasTargets || stats.remainingMismatch <= 0) {
         artisticWarning.style.display = 'none';
         artisticWarning.textContent = '';
         return;
     }
     artisticWarning.style.display = 'block';
-    artisticWarning.textContent = `图片覆盖过大，可用数据位不足：纠错区仅尽力拟合（未匹配 ${stats.remainingMismatch}/${stats.totalTargets}）`;
+    const extra = (stats.coveredFreedomUsed > 0)
+        ? `，已启用覆盖区补自由位 ${stats.coveredFreedomUsed}`
+        : '';
+    artisticWarning.textContent = `纠错区仅尽力拟合（未匹配 ${stats.remainingMismatch}/${stats.totalTargets}${extra}）`;
+}
+
+function showComputeOverlay(titleText, subtitleText) {
+    if (!computeOverlay) return;
+    computeCancelRequested = false;
+    computeOverlay.style.display = 'flex';
+    if (computeTitle) computeTitle.textContent = titleText || '计算中...';
+    if (computeSubtitle) computeSubtitle.textContent = subtitleText || '正在处理';
+    if (computeProgressBar) computeProgressBar.style.width = '0%';
+    if (computeProgressText) computeProgressText.textContent = '0%';
+}
+
+function setComputeProgress(done, total) {
+    if (!computeOverlay || !computeProgressBar || !computeProgressText) return;
+    const t = Math.max(1, total || 1);
+    const d = Math.max(0, Math.min(t, done || 0));
+    const pct = Math.round((d / t) * 100);
+    computeProgressBar.style.width = `${pct}%`;
+    computeProgressText.textContent = `${pct}% (${d}/${t})`;
+}
+
+function hideComputeOverlay() {
+    if (!computeOverlay) return;
+    computeOverlay.style.display = 'none';
 }
 
 function isFormatInfoCell(rr, cc, count) {
@@ -1956,7 +2101,26 @@ function buildSuffixStringFromBytes(bytes, startBit, endBit) {
     return out;
 }
 
-function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr) {
+function collectBytesFromBitRange(bytes, startBit, endBit) {
+    const out = [];
+    let ptr = startBit;
+    while (ptr <= endBit - 8) {
+        let val = 0;
+        for (let i = 0; i < 8; i++) {
+            const g = ptr + i;
+            const bIdx = Math.floor(g / 8);
+            const bitPos = 7 - (g % 8);
+            if (bIdx < bytes.length && (bytes[bIdx] & (1 << bitPos))) {
+                val |= (1 << (7 - i));
+            }
+        }
+        out.push(val & 0xff);
+        ptr += 8;
+    }
+    return out;
+}
+
+function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr, padBytes = null) {
     const qr = qrcode(typeNumber, eccLevel);
     if (userText && userText.length > 0) {
         try {
@@ -1966,21 +2130,27 @@ function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr) {
             qr.addData(unescape(encodeURIComponent(userText)), 'Byte');
         }
     }
-    qr.addData(hasSeparator ? ('#' + suffixStr) : suffixStr, 'Byte');
+    if (padBytes && padBytes.length > 0 && qr.setCustomPadBytes) {
+        qr.setCustomPadBytes(padBytes);
+    } else {
+        qr.addData(hasSeparator ? ('#' + suffixStr) : suffixStr, 'Byte');
+    }
     if (mask !== -1 && qr.makeMasked) qr.makeMasked(mask);
     else qr.make();
     return qr;
 }
 
-function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
+async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator, usePadFreedomMode = false, options = {}) {
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const isCanceled = typeof options.isCanceled === 'function' ? options.isCanceled : (() => false);
     if (!pixelMap || !generatedQR || !previewImg || !importState.active) {
         lastArtisticSolveStats = null;
-        return;
+        return { canceled: false };
     }
     const src = getSourceDimensions(previewImg);
     if (src.width <= 0 || src.height <= 0) {
         lastArtisticSolveStats = null;
-        return;
+        return { canceled: false };
     }
 
     const basisMode = isImageBasisMode();
@@ -2050,6 +2220,7 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
     };
 
     const mutableByBlock = new Map();
+    const coveredMutableByBlock = new Map();
     const ecTargetsByBlock = new Map();
     const count = generatedQR.getModuleCount();
     for (let r = 0; r < count; r++) {
@@ -2066,12 +2237,15 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
             }
             if (!isEditableDataCell(cell)) continue;
             const t = targetAt(r, c);
+            const byteIndex = Math.floor(cell.globalBitIndex / 8);
+            const blockRow = dataByteBlockRow[byteIndex];
+            if (!Number.isFinite(blockRow)) continue;
             if (t === null) {
-                const byteIndex = Math.floor(cell.globalBitIndex / 8);
-                const blockRow = dataByteBlockRow[byteIndex];
-                if (!Number.isFinite(blockRow)) continue;
                 if (!mutableByBlock.has(blockRow)) mutableByBlock.set(blockRow, []);
                 mutableByBlock.get(blockRow).push(cell.globalBitIndex);
+            } else {
+                if (!coveredMutableByBlock.has(blockRow)) coveredMutableByBlock.set(blockRow, []);
+                coveredMutableByBlock.get(blockRow).push(cell.globalBitIndex);
             }
         }
     }
@@ -2083,7 +2257,7 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
             remainingMismatch: 0,
             coverageLimited: false
         };
-        return;
+        return { canceled: false };
     }
 
     const solveLinearGF2 = (matrix, rhs, varCount) => {
@@ -2147,24 +2321,38 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
     let totalFreedoms = 0;
     let remainingMismatch = 0;
     let blocksNoFreedom = 0;
+    let coveredFreedomUsed = 0;
 
     const allTargetRows = [...ecTargetsByBlock.keys()];
+    const totalProgressSteps = Math.max(1, allTargetRows.length * 3);
     for (let bi = 0; bi < allTargetRows.length; bi++) {
+        if (isCanceled()) return { canceled: true };
         const row = allTargetRows[bi];
-        const freedoms = (mutableByBlock.get(row) || []);
+        const primaryFreedoms = (mutableByBlock.get(row) || []);
+        const coveredFreedoms = (coveredMutableByBlock.get(row) || []);
+        let freedoms = primaryFreedoms.slice();
         const targets = (ecTargetsByBlock.get(row) || []);
         if (!targets.length) continue;
         totalTargets += targets.length;
+        const allowCoveredFreedom = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
+        if (allowCoveredFreedom && freedoms.length < targets.length && coveredFreedoms.length > 0) {
+            const need = targets.length - freedoms.length;
+            const supplement = coveredFreedoms.slice(0, need);
+            coveredFreedomUsed += supplement.length;
+            freedoms = freedoms.concat(supplement);
+        }
         totalFreedoms += freedoms.length;
         if (!freedoms.length) {
             blocksNoFreedom += 1;
             remainingMismatch += targets.length;
+            if (onProgress) onProgress(bi * 3 + 3, totalProgressSteps);
             continue;
         }
 
         const evalQrBits = (bytes) => {
-            const suffix = buildSuffixStringFromBytes(bytes, payloadStartBit, payloadEditableEndBit);
-            const qrEval = createQrFromSuffix(typeNumber, evalMask, hasSeparator, suffix);
+            const suffix = usePadFreedomMode ? '' : buildSuffixStringFromBytes(bytes, payloadStartBit, payloadEditableEndBit);
+            const padBytes = usePadFreedomMode ? collectBytesFromBitRange(bytes, payloadStartBit, payloadEditableEndBit) : null;
+            const qrEval = createQrFromSuffix(typeNumber, evalMask, hasSeparator, suffix, padBytes);
             const bits = new Array(targets.length);
             for (let i = 0; i < targets.length; i++) {
                 const p = targets[i];
@@ -2189,6 +2377,7 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
 
         const matrix = Array.from({ length: targets.length }, () => new Array(freedoms.length).fill(0));
         for (let j = 0; j < freedoms.length; j++) {
+            if (isCanceled()) return { canceled: true };
             const g = freedoms[j];
             const bIdx = Math.floor(g / 8);
             const bitPos = 7 - (g % 8);
@@ -2201,11 +2390,17 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
             for (let i = 0; i < targets.length; i++) {
                 matrix[i][j] = baseBits[i] ^ flipBits[i];
             }
+
+            if ((j & 31) === 31) {
+                await new Promise((resolve) => setTimeout(resolve, 0));
+            }
         }
+        if (onProgress) onProgress(bi * 3 + 1, totalProgressSteps);
 
         const solution = solveLinearGF2(matrix, rhs, freedoms.length);
         if (solution) {
             for (let j = 0; j < freedoms.length; j++) {
+                if (isCanceled()) return { canceled: true };
                 if (!solution[j]) continue;
                 const g = freedoms[j];
                 const bIdx = Math.floor(g / 8);
@@ -2215,9 +2410,11 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
             }
             bestMismatch = evalMismatchFromBits(evalQrBits(work));
         }
+        if (onProgress) onProgress(bi * 3 + 2, totalProgressSteps);
 
         const greedyTries = Math.min(32, freedoms.length);
         for (let i = 0; i < greedyTries; i++) {
+            if (isCanceled()) return { canceled: true };
             const g = freedoms[i];
             const bIdx = Math.floor(g / 8);
             const bitPos = 7 - (g % 8);
@@ -2232,6 +2429,11 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
         }
 
         remainingMismatch += bestMismatch;
+
+        if (onProgress) onProgress(bi * 3 + 3, totalProgressSteps);
+        if ((bi & 1) === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
     }
 
     currentSuffixBytes = work;
@@ -2239,8 +2441,10 @@ function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator) {
         hasTargets: totalTargets > 0,
         totalTargets,
         remainingMismatch,
+        coveredFreedomUsed,
         coverageLimited: blocksNoFreedom > 0 || totalFreedoms < totalTargets
     };
+    return { canceled: false };
 }
 
 // --- Core Mapping Logic ---
@@ -2594,12 +2798,23 @@ function stringToUtf8ByteArray(str) {
     return arr;
 }
    
-function updateQR() {
+async function updateQR(options = {}) {
+    const runId = ++qrComputeRunId;
+    const skipArtisticPass = !!options.skipArtisticPass;
     const encodingError = getEncodingValidationError(encodingMode, userText || '');
+    const artisticModeOn = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
+    const shouldShowCompute = artisticModeOn && hasImageUpload && importState.active && !skipArtisticPass;
+    const usePadFreedomMode = true;
+    padFreedomModeActive = usePadFreedomMode;
+    if (shouldShowCompute) {
+        showComputeOverlay('计算中...', '正在准备求解任务');
+        setComputeProgress(0, 100);
+    }
     updateEncodingWarning(encodingError);
     if (encodingError) {
         updateTextOverflowWarning(null);
         updateArtisticWarning(null);
+        hideComputeOverlay();
         return;
     }
 
@@ -2668,10 +2883,12 @@ function updateQR() {
             totalBits += getBitLength(encodingMode, userText);
         }
 
-        // Segment 2: Suffix
-        totalBits += 4; // Mode (Byte)
-        totalBits += getLengthBits('Byte', v);
-        totalBits += seg2PayloadBits;
+        // Segment 2: Suffix (disabled when using pad freedom mode)
+        if (!usePadFreedomMode) {
+            totalBits += 4; // Mode (Byte)
+            totalBits += getLengthBits('Byte', v);
+            totalBits += seg2PayloadBits;
+        }
 
         if (totalBits <= capacityBits) {
              minVersion = v;
@@ -2685,7 +2902,7 @@ function updateQR() {
     rsBlocks40.forEach((b) => { capacityBits40 += b.dataCount; });
     capacityBits40 *= 8;
     const seg1HeaderBits40 = (userText && userText.length > 0) ? (4 + getLengthBits(encodingMode, 40)) : 0;
-    const seg2FixedBits40 = 4 + getLengthBits('Byte', 40) + seg2PayloadBits;
+    const seg2FixedBits40 = usePadFreedomMode ? 0 : (4 + getLengthBits('Byte', 40) + seg2PayloadBits);
     const budgetBits40 = capacityBits40 - seg1HeaderBits40 - seg2FixedBits40;
     const totalBitsAt40 = seg1HeaderBits40 + ((userText && userText.length > 0) ? getBitLength(encodingMode, userText) : 0) + seg2FixedBits40;
     const fitsAtV40 = totalBitsAt40 <= capacityBits40;
@@ -2702,6 +2919,7 @@ function updateQR() {
 
     if (!fitsAtV40) {
         updateArtisticWarning(null);
+        hideComputeOverlay();
         return;
     }
 
@@ -2827,58 +3045,70 @@ function updateQR() {
         data1.write(prefixBuffer);
     }
     
-    // Segment 2 Header: For the Suffix Part
-    // We treat Suffix as the rest (Byte Mode)
-    // 1. Mode (Byte = 4, 4 bits)
-    prefixBuffer.put(4, 4);
-    
-    // 2. Separator '#' (Only if User Text exists)
-    // Actually '#' is part of the DATA of Segment 2, OR we can append it to Segment 1?
-    // In original code: `t.addData(userText + "#" + suffix, ...)`
-    // So if userText exists, we want separator.
-    // If we put '#' in Segment 2, we must count it in length.
-    const hasSeparator = appendHash;
-    const separatorLen = hasSeparator ? 1 : 0;
-    
-    // 3. Count Indicator
-    // Need calculate length of Suffix Chars.
-    const countBits = typeNumber < 10 ? 8 : 16;
-    
-    // Calculate available bits for suffix
-    const currentBits = prefixBuffer.getLengthInBits();
-    
-    // available bits for payload (separator + suffix)
-    // We reserve space for headers + data.
-    // Length Header itself takes `countBits`.
-    // available = Total - CurrentPrefix (Mode+Len+Data of Seg1 + Mode of Seg2) - LenHeader of Seg2
-    const availableBits = totalDataBits - currentBits - countBits; 
-    
-    // How many bytes can we fit?
-    // Suffix Payload = Separator(#) + SuffixData
-    const maxPayloadBytes = Math.floor(availableBits / 8);
-    
-    prefixBuffer.put(maxPayloadBytes, countBits);
-    
-    // 4. The '#' Character (if needed)
-    if (hasSeparator) {
-        prefixBuffer.put(0x23, 8);
-    }
-    
-    // Now we have the full Prefix Bitstream (Seg1 + Seg2Header + Possible#)
-    // Write this into our Master Buffer `currentSuffixBytes`
-    // This overwrites the "Protected" area with correct headers
-    writeBufferBits(prefixBuffer, currentSuffixBytes);
-    
-    payloadStartBit = prefixBuffer.getLengthInBits();
-    const editableSuffixBytes = Math.max(0, maxPayloadBytes - (hasSeparator ? 1 : 0));
-    payloadEditableEndBit = Math.min(totalDataBits, payloadStartBit + editableSuffixBytes * 8);
+    let hasSeparator = false;
+    if (!usePadFreedomMode) {
+        // Segment 2 Header: For the Suffix Part
+        // We treat Suffix as the rest (Byte Mode)
+        // 1. Mode (Byte = 4, 4 bits)
+        prefixBuffer.put(4, 4);
 
-    const artisticModeOn = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
-    if (artisticModeOn && hasImageUpload && importState.active) {
+        // 2. Separator '#' (Only if User Text exists)
+        hasSeparator = appendHash;
+
+        // 3. Count Indicator
+        const countBits = typeNumber < 10 ? 8 : 16;
+
+        // Calculate available bits for suffix
+        const currentBits = prefixBuffer.getLengthInBits();
+
+        // available = Total - CurrentPrefix - LenHeader of Seg2
+        const availableBits = totalDataBits - currentBits - countBits;
+
+        // Suffix Payload = Separator(#) + SuffixData
+        const maxPayloadBytes = Math.floor(availableBits / 8);
+
+        prefixBuffer.put(maxPayloadBytes, countBits);
+
+        // 4. The '#' Character (if needed)
+        if (hasSeparator) {
+            prefixBuffer.put(0x23, 8);
+        }
+
+        // Now we have the full Prefix Bitstream (Seg1 + Seg2Header + Possible#)
+        writeBufferBits(prefixBuffer, currentSuffixBytes);
+
+        payloadStartBit = prefixBuffer.getLengthInBits();
+        const editableSuffixBytes = Math.max(0, maxPayloadBytes - (hasSeparator ? 1 : 0));
+        payloadEditableEndBit = Math.min(totalDataBits, payloadStartBit + editableSuffixBytes * 8);
+    } else {
+        // Pad freedom mode: keep only actual user payload and expose pad bytes as freedom bits.
+        writeBufferBits(prefixBuffer, currentSuffixBytes);
+        const segBits = prefixBuffer.getLengthInBits();
+        const termBits = Math.min(4, Math.max(0, totalDataBits - segBits));
+        const afterTermBits = segBits + termBits;
+        payloadStartBit = Math.min(totalDataBits, Math.ceil(afterTermBits / 8) * 8);
+        payloadEditableEndBit = totalDataBits;
+    }
+
+    if (!skipArtisticPass && artisticModeOn && hasImageUpload && importState.active) {
         const evalMask = (maskForMake === -1) ? 0 : maskForMake;
-        optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator);
+        if (computeSubtitle) computeSubtitle.textContent = '正在拟合纠错码区';
+        try {
+            const result = await optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator, usePadFreedomMode, {
+                onProgress: (done, total) => setComputeProgress(done, total),
+                isCanceled: () => computeCancelRequested || runId !== qrComputeRunId
+            });
+            if (result && result.canceled) {
+                hideComputeOverlay();
+                return;
+            }
+            setComputeProgress(100, 100);
+        } finally {
+            hideComputeOverlay();
+        }
     } else {
         lastArtisticSolveStats = null;
+        hideComputeOverlay();
     }
     updateArtisticWarning(lastArtisticSolveStats);
     
@@ -2910,11 +3140,18 @@ function updateQR() {
         ptr += 8;
     }
     
-    drawGrid(constructedSuffix, typeNumber, maskForMake, hasSeparator); 
+    let padBytesForRender = null;
+    if (usePadFreedomMode) {
+        constructedSuffix = '';
+        padBytesForRender = collectBytesFromBitRange(currentSuffixBytes, payloadStartBit, payloadEditableEndBit);
+    }
+
+    drawGrid(constructedSuffix, typeNumber, maskForMake, hasSeparator, padBytesForRender); 
     updateMaskControls();
+    refreshCellSizeAutoButtonVisibility();
 }
 
-function drawGrid(suffixStr, type, mask, hasSeparator) {
+function drawGrid(suffixStr, type, mask, hasSeparator, padBytesForRender = null) {
     let qr = qrcode(type, eccLevel);
     
     // Add Segment 1
@@ -2933,11 +3170,14 @@ function drawGrid(suffixStr, type, mask, hasSeparator) {
         }
     }
     
-    // Add Segment 2
-    let seg2Data = suffixStr;
-    if (hasSeparator) seg2Data = "#" + suffixStr;
-    
-    qr.addData(seg2Data, 'Byte');
+    if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
+        qr.setCustomPadBytes(padBytesForRender);
+    } else {
+        // Add Segment 2
+        let seg2Data = suffixStr;
+        if (hasSeparator) seg2Data = "#" + suffixStr;
+        qr.addData(seg2Data, 'Byte');
+    }
 
     // Critical: Mask
     // If mask is -1, use make() to calculate best penalty. Else force mask.
@@ -3131,29 +3371,18 @@ function renderQR(isExport, imageOverride) {
                 continue;
             }
 
+            if (isFinderAlignTransparentCell(finderStyle, r, c, count)) {
+                continue;
+            }
+
             let covered = false;
             if (!basisMode && hasImage && embedImage) {
-                const modLeft = x;
-                const modTop = y;
-                const modRight = x + moduleW;
-                const modBottom = y + moduleH;
-                const imgLeft = imgDrawX;
-                const imgTop = imgDrawY;
-                const imgRight = imgDrawX + imgDrawW;
-                const imgBottom = imgDrawY + imgDrawH;
-                const eps = 0.5;
-
-                if (modRight > imgLeft + eps && modLeft < imgRight - eps &&
-                    modBottom > imgTop + eps && modTop < imgBottom - eps) {
-                    covered = true;
-                }
-
-                if (!covered && offData) {
+                if (offData) {
                     const cx = Math.floor(x + moduleW / 2);
                     const cy = Math.floor(y + moduleH / 2);
                     if (cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                         const idx = (cy * canvas.width + cx) * 4;
-                        if (offData[idx + 3] > 10) covered = true;
+                        covered = offData[idx + 3] > 10;
                     }
                 }
             }
@@ -3188,12 +3417,12 @@ function renderQR(isExport, imageOverride) {
 
                 if (isTransparent) {
                     drawStyledModule(
-                        x + offsetX,
-                        y + offsetY,
-                        smallSize,
-                        smallSize,
+                        x,
+                        y,
+                        moduleW,
+                        moduleH,
                         activeStyle,
-                        isDark ? rgbaFromHex(fgColor, 0.85) : rgbaFromHex(bgColor, 0.85)
+                        isDark ? fgColor : bgColor
                     );
                 } else {
                     let alpha = 0.3;
@@ -3867,6 +4096,9 @@ async function handleImageUpload(e) {
         if (artisticModeCb) {
             artisticModeCb.disabled = false;
         }
+        if (allowCoveredFreedomCb) {
+            allowCoveredFreedomCb.disabled = !(artisticModeCb && artisticModeCb.checked);
+        }
 
         hasImageUpload = true;
         basisImageWidth = previewImg.naturalWidth || previewImg.width || 0;
@@ -3980,7 +4212,7 @@ function updateOutOfBoundsState() {
     const overlap = hasOverlap(imgRect, qrRect);
     importState.outOfBounds = !overlap;
     const isPointerDragging = importState.isDragging || importState.isResizing;
-    if (exceed.hasExceed && isPointerDragging) {
+    if (importState.outOfBounds && isPointerDragging) {
         importOverlay.classList.add('import-outside');
         const bounds = getPointerDeleteBounds();
         updateDeleteZones(exceed.sides, bounds);
@@ -4020,6 +4252,10 @@ function clearImportedImage() {
     if (artisticModeCb) {
         artisticModeCb.checked = false;
         artisticModeCb.disabled = true;
+    }
+    if (allowCoveredFreedomCb) {
+        allowCoveredFreedomCb.checked = false;
+        allowCoveredFreedomCb.disabled = true;
     }
     if (cellSizeAutoBtn) cellSizeAutoBtn.style.display = 'none';
     updateMaskControls();

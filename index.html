@@ -12,17 +12,11 @@
 <body>
     <div class="container">
         <aside class="sidebar">
-            <h1>QR Art 🎨</h1>
-            
             <div class="control-group">
                 <label>文本内容:</label>
                 <textarea id="text-input" rows="3">Hello World</textarea>
                 <div id="encoding-warning" class="encoding-warning" style="display:none;"></div>
                 <div id="text-overflow-warning" class="text-overflow-warning" style="display:none;"></div>
-                <label class="inline-check">
-                    <input type="checkbox" id="append-hash" checked>
-                    末尾添加"#"
-                </label>
             </div>
 
             <div class="control-group">
@@ -44,14 +38,6 @@
                 </select>
             </div>
 
-            <div class="control-group full-width" style="margin-top: 5px;">
-                <label style="display:flex; align-items:center;">
-                    <input type="checkbox" id="artistic-mode" style="width: auto; margin-right: 8px;"> 
-                    利用纠错码区
-                </label>
-                <div id="artistic-warning" class="artistic-warning" style="display: none;"></div>
-            </div>
-
             <div class="control-group hz-layout">
                 <label>版本 (大小):</label>
                 <!-- Allow 0 for Auto -->
@@ -69,15 +55,18 @@
                 </div>
             </div>
 
-            <div class="control-group">
+            <div class="control-group compact-dropdown-row">
                 <label>模块样式:</label>
-                <div class="style-gallery" id="module-style-gallery">
-                    <button class="style-item style-btn active" data-style-target="module" data-style="square" type="button"><canvas data-style-preview="module-square" width="128" height="128"></canvas><div class="style-name">方块</div></button>
-                    <button class="style-item style-btn" data-style-target="module" data-style="rounded" type="button"><canvas data-style-preview="module-rounded" width="128" height="128"></canvas><div class="style-name">圆角</div></button>
-                    <button class="style-item style-btn" data-style-target="module" data-style="circle" type="button"><canvas data-style-preview="module-circle" width="128" height="128"></canvas><div class="style-name">圆点</div></button>
-                    <button class="style-item style-btn" data-style-target="module" data-style="diamond" type="button"><canvas data-style-preview="module-diamond" width="128" height="128"></canvas><div class="style-name">菱形</div></button>
-                    <button class="style-item style-btn" data-style-target="module" data-style="liquid" type="button"><canvas data-style-preview="module-liquid" width="128" height="128"></canvas><div class="style-name">液态</div></button>
-                </div>
+                <details class="option-dropdown">
+                    <summary id="module-style-summary">方块</summary>
+                    <div class="style-gallery" id="module-style-gallery">
+                        <button class="style-item style-btn active" data-style-target="module" data-style="square" type="button"><canvas data-style-preview="module-square" width="128" height="128"></canvas><div class="style-name">方块</div></button>
+                        <button class="style-item style-btn" data-style-target="module" data-style="rounded" type="button"><canvas data-style-preview="module-rounded" width="128" height="128"></canvas><div class="style-name">圆角</div></button>
+                        <button class="style-item style-btn" data-style-target="module" data-style="circle" type="button"><canvas data-style-preview="module-circle" width="128" height="128"></canvas><div class="style-name">圆点</div></button>
+                        <button class="style-item style-btn" data-style-target="module" data-style="diamond" type="button"><canvas data-style-preview="module-diamond" width="128" height="128"></canvas><div class="style-name">菱形</div></button>
+                        <button class="style-item style-btn" data-style-target="module" data-style="liquid" type="button"><canvas data-style-preview="module-liquid" width="128" height="128"></canvas><div class="style-name">液态</div></button>
+                    </div>
+                </details>
                 <select id="module-style" style="display:none;">
                     <option value="square" selected>方块</option>
                     <option value="rounded">圆角方块</option>
@@ -87,19 +76,24 @@
                 </select>
             </div>
 
-            <div class="control-group">
+            <div class="control-group compact-dropdown-row">
                 <label>码眼样式:</label>
-                <div class="style-gallery" id="finder-style-gallery">
-                    <button class="style-item style-btn active" data-style-target="finder" data-style="classic" type="button"><canvas data-style-preview="finder-classic" width="224" height="224"></canvas><div class="style-name">经典</div></button>
-                    <button class="style-item style-btn" data-style-target="finder" data-style="circle" type="button"><canvas data-style-preview="finder-circle" width="224" height="224"></canvas><div class="style-name">圆形</div></button>
-                    <button class="style-item style-btn" data-style-target="finder" data-style="polar-day" type="button"><canvas data-style-preview="finder-polar-day" width="224" height="224"></canvas><div class="style-name">极昼</div></button>
-                    <button class="style-item style-btn" data-style-target="finder" data-style="polar-night" type="button"><canvas data-style-preview="finder-polar-night" width="224" height="224"></canvas><div class="style-name">极夜</div></button>
-                </div>
+                <details class="option-dropdown">
+                    <summary id="finder-style-summary">经典</summary>
+                    <div class="style-gallery" id="finder-style-gallery">
+                        <button class="style-item style-btn active" data-style-target="finder" data-style="classic" type="button"><canvas data-style-preview="finder-classic" width="224" height="224"></canvas><div class="style-name">经典</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="circle" type="button"><canvas data-style-preview="finder-circle" width="224" height="224"></canvas><div class="style-name">圆形</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="polar-day" type="button"><canvas data-style-preview="finder-polar-day" width="224" height="224"></canvas><div class="style-name">极昼</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="polar-night" type="button"><canvas data-style-preview="finder-polar-night" width="224" height="224"></canvas><div class="style-name">极夜</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="aurora" type="button"><canvas data-style-preview="finder-aurora" width="224" height="224"></canvas><div class="style-name">极光</div></button>
+                    </div>
+                </details>
                 <select id="finder-style" style="display:none;">
                     <option value="classic" selected>经典</option>
                     <option value="circle">圆形</option>
                     <option value="polar-day">极昼</option>
                     <option value="polar-night">极夜</option>
+                    <option value="aurora">极光</option>
                 </select>
             </div>
 
@@ -129,52 +123,71 @@
                 </div>
             </div>
 
-            <div class="control-group">
+            <div class="control-group compact-dropdown-row">
                 <label>掩码模式 (Mask):</label>
-                <div class="mask-controls">
-                    <button class="mask-btn mask-auto" id="mask-auto-btn" data-mask="-1" type="button">自动（当前：0）</button>
-                    <button class="mask-btn" data-mask="-2" type="button">无（展示掩码前）</button>
-                </div>
-            </div>
-
-            <div class="mask-gallery" id="mask-gallery">
-                <div class="mask-items">
-                    <button class="mask-item mask-btn" data-mask="0" type="button"><canvas data-mask="0" width="64" height="64"></canvas><div class="mask-formula">0:(i+j)%2=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="1" type="button"><canvas data-mask="1" width="64" height="64"></canvas><div class="mask-formula">1:i%2=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="2" type="button"><canvas data-mask="2" width="64" height="64"></canvas><div class="mask-formula">2:j%3=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="3" type="button"><canvas data-mask="3" width="64" height="64"></canvas><div class="mask-formula">3:(i+j)%3=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="4" type="button"><canvas data-mask="4" width="64" height="64"></canvas><div class="mask-formula">4:(⌊i/2⌋+⌊j/3⌋)%2=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="5" type="button"><canvas data-mask="5" width="64" height="64"></canvas><div class="mask-formula">5:(i*j)%2+(i*j)%3=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="6" type="button"><canvas data-mask="6" width="64" height="64"></canvas><div class="mask-formula">6:((i*j)%2+(i*j)%3)%2=0</div></button>
-                    <button class="mask-item mask-btn" data-mask="7" type="button"><canvas data-mask="7" width="64" height="64"></canvas><div class="mask-formula">7:((i*j)%3+(i+j)%2)%2=0</div></button>
-                </div>
-            </div>
-
-            <div class="control-group" style="border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px;">
-                    <input type="checkbox" id="image-basis-cb" disabled>
-                    <span>以图片为基准</span>
-                </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                    <input type="checkbox" id="embed-image-cb">
-                    <span>保留图片背景</span>
-                </label>
-                <p class="hint">勾选后，图片将作为背景，二维码模块将变为半透明微缩方块以露出图片。</p>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-top: 6px;">
-                    <input type="checkbox" id="dynamic-preview-cb" disabled>
-                    <span>动态预览</span>
-                </label>
+                <details class="option-dropdown">
+                    <summary id="mask-mode-summary">自动</summary>
+                    <div class="mask-controls">
+                        <button class="mask-btn mask-auto" id="mask-auto-btn" data-mask="-1" type="button">自动（当前：0）</button>
+                        <button class="mask-btn" data-mask="-2" type="button">无（展示掩码前）</button>
+                    </div>
+                    <div class="mask-gallery" id="mask-gallery">
+                        <div class="mask-items">
+                            <button class="mask-item mask-btn" data-mask="0" type="button"><canvas data-mask="0" width="64" height="64"></canvas><div class="mask-formula">0:(i+j)%2=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="1" type="button"><canvas data-mask="1" width="64" height="64"></canvas><div class="mask-formula">1:i%2=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="2" type="button"><canvas data-mask="2" width="64" height="64"></canvas><div class="mask-formula">2:j%3=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="3" type="button"><canvas data-mask="3" width="64" height="64"></canvas><div class="mask-formula">3:(i+j)%3=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="4" type="button"><canvas data-mask="4" width="64" height="64"></canvas><div class="mask-formula">4:(⌊i/2⌋+⌊j/3⌋)%2=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="5" type="button"><canvas data-mask="5" width="64" height="64"></canvas><div class="mask-formula">5:(i*j)%2+(i*j)%3=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="6" type="button"><canvas data-mask="6" width="64" height="64"></canvas><div class="mask-formula">6:((i*j)%2+(i*j)%3)%2=0</div></button>
+                            <button class="mask-item mask-btn" data-mask="7" type="button"><canvas data-mask="7" width="64" height="64"></canvas><div class="mask-formula">7:((i*j)%3+(i+j)%2)%2=0</div></button>
+                        </div>
+                    </div>
+                </details>
             </div>
 
             <div class="control-group">
                 <h3>高级作画</h3>
                 <p class="hint">左键绘制，右键擦除。</p>
                 <div class="tools">
-                    <button id="import-btn" class="tool-btn" title="上传图片 (自动像素化)">📷</button>
+                    <button id="import-btn" class="tool-btn" title="上传图片 (自动像素化)">🖼️</button>
                     <button id="clear-draw" class="tool-btn" title="清空绘制">🗑️</button>
                     <button id="whiten-btn" class="tool-btn" title="一键美白 (填充区变白)">✨</button>
                     <button id="download-btn" class="tool-btn" title="下载图片">💾</button>
                 </div>
+
+                <div class="control-group full-width" style="margin-top: 8px;">
+                    <label style="display:flex; align-items:center;">
+                        <input type="checkbox" id="artistic-mode" style="width: auto; margin-right: 8px;"> 
+                        利用纠错码区
+                    </label>
+                    <p class="hint option-hint">开启后将优先调整数据位，以尽可能让纠错码区更贴近图片明暗。</p>
+                    <label class="inline-check" style="margin-top: 6px;">
+                        <input type="checkbox" id="allow-covered-freedom">
+                        利用图片覆盖数据区
+                    </label>
+                    <p class="hint option-hint">开启后允许借用图片覆盖的数据区位作为额外自由度，提升拟合能力。</p>
+                    <div id="artistic-warning" class="artistic-warning" style="display: none;"></div>
+                </div>
+
+                <div class="control-group" style="padding-top: 6px; margin-top: 4px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px;">
+                        <input type="checkbox" id="image-basis-cb" disabled>
+                        <span>以图片为基准</span>
+                    </label>
+                    <p class="hint option-hint">以图片实际像素为坐标基准，二维码在图片坐标系中保持相对位置与比例。</p>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="embed-image-cb">
+                        <span>保留图片背景</span>
+                    </label>
+                    <p class="hint option-hint">勾选后，图片将作为背景，二维码模块将变为半透明微缩方块以露出图片。</p>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-top: 6px;">
+                        <input type="checkbox" id="dynamic-preview-cb" disabled>
+                        <span>动态预览</span>
+                    </label>
+                    <p class="hint option-hint">用于GIF/APNG实时预览每帧融合效果，便于观察动画二维码可读性。</p>
+                </div>
+
                 <input type="file" id="img-upload" accept="image/*" style="display: none">
             </div>
         </aside>
@@ -214,6 +227,18 @@
                 <div class="legend-item"><span class="dot" style="border: 1px dashed #ccc; background: transparent;"></span> 自由绘制区 (Suffix)</div>
             </div>
         </main>
+    </div>
+
+    <div id="compute-overlay" class="compute-overlay" style="display:none;">
+        <div class="compute-card">
+            <div id="compute-title" class="compute-title">计算中...</div>
+            <div id="compute-subtitle" class="compute-subtitle">正在拟合纠错码区</div>
+            <div class="compute-progress-wrap">
+                <div id="compute-progress-bar" class="compute-progress-bar"></div>
+            </div>
+            <div id="compute-progress-text" class="compute-progress-text">0%</div>
+            <button id="compute-cancel-btn" type="button" class="mask-btn">取消</button>
+        </div>
     </div>
 
     <script src="script.js"></script>

@@ -37,6 +37,7 @@ var qrcode = function() {
     var _moduleCount = 0;
     var _dataCache = null;
     var _dataList = [];
+    var _customPadBytes = null;
 
     var _this = {};
 
@@ -371,17 +372,25 @@ var qrcode = function() {
       }
 
       // padding
-      while (true) {
-
-        if (buffer.getLengthInBits() >= totalDataCount * 8) {
-          break;
+      if (_customPadBytes && _customPadBytes.length > 0) {
+        var padIdx = 0;
+        while (buffer.getLengthInBits() < totalDataCount * 8) {
+          buffer.put(_customPadBytes[padIdx % _customPadBytes.length] & 0xff, 8);
+          padIdx += 1;
         }
-        buffer.put(PAD0, 8);
+      } else {
+        while (true) {
 
-        if (buffer.getLengthInBits() >= totalDataCount * 8) {
-          break;
+          if (buffer.getLengthInBits() >= totalDataCount * 8) {
+            break;
+          }
+          buffer.put(PAD0, 8);
+
+          if (buffer.getLengthInBits() >= totalDataCount * 8) {
+            break;
+          }
+          buffer.put(PAD1, 8);
         }
-        buffer.put(PAD1, 8);
       }
 
       return createBytes(buffer, rsBlocks);
@@ -411,6 +420,20 @@ var qrcode = function() {
       }
 
       _dataList.push(newData);
+      _dataCache = null;
+    };
+
+    _this.setCustomPadBytes = function(bytes) {
+      if (!bytes || bytes.length === 0) {
+        _customPadBytes = null;
+      } else {
+        _customPadBytes = bytes.slice(0);
+      }
+      _dataCache = null;
+    };
+
+    _this.clearCustomPadBytes = function() {
+      _customPadBytes = null;
       _dataCache = null;
     };
 
