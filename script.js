@@ -323,6 +323,27 @@ function setStaticGifPreview() {
 async function startVideoPreview(token = previewSessionToken) {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoElement || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
     const artisticOn = !!(artisticModeCb && artisticModeCb.checked);
+    if (artisticOn) {
+        const probeVideo = uploadInfo.videoElement;
+        const width = probeVideo.videoWidth || uploadInfo.gifWidth || 0;
+        const height = probeVideo.videoHeight || uploadInfo.gifHeight || 0;
+        if (width > 0 && height > 0) {
+            const probeCanvas = document.createElement('canvas');
+            probeCanvas.width = width;
+            probeCanvas.height = height;
+            const pctx = probeCanvas.getContext('2d', { willReadFrequently: true });
+            try {
+                await seekVideo(probeVideo, 0);
+            } catch (_) {}
+            pctx.drawImage(probeVideo, 0, 0, width, height);
+            const touchEc = doesFrameTouchEcRegion(probeCanvas);
+            if (!touchEc) {
+                await startLiveVideoPreview(token);
+                return;
+            }
+        }
+    }
+
     if (!artisticOn) {
         await startLiveVideoPreview(token);
         return;
@@ -336,6 +357,69 @@ async function startVideoPreview(token = previewSessionToken) {
     startRenderedFramePreview(cache, token);
 }
 
+function doesFrameTouchEcRegion(imageSource) {
+    if (!imageSource || !pixelMap || !pixelMap.length || !importState.active) return false;
+    const source = getSourceDimensions(imageSource);
+    const sourceW = source.width;
+    const sourceH = source.height;
+    if (sourceW <= 0 || sourceH <= 0) return false;
+
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = sourceW;
+    tmpCanvas.height = sourceH;
+    const tCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
+    tCtx.drawImage(imageSource, 0, 0, sourceW, sourceH);
+    const imgData = tCtx.getImageData(0, 0, sourceW, sourceH);
+
+    const basisMode = isImageBasisMode();
+    const qrSize = pixelMap.length;
+    const totalModulesVisual = qrSize + 2 * qrMargin;
+    let qrStartX = 0;
+    let qrStartY = 0;
+    let moduleW = CELL_SIZE;
+    let moduleH = CELL_SIZE;
+    let imageBoxX = 0;
+    let imageBoxY = 0;
+    let imageBoxW = Math.max(1, canvas.width);
+    let imageBoxH = Math.max(1, canvas.height);
+
+    if (basisMode) {
+        const basisBox = getBasisQrBoxInternal();
+        qrStartX = basisBox.x;
+        qrStartY = basisBox.y;
+        moduleW = basisBox.width / totalModulesVisual;
+        moduleH = basisBox.height / totalModulesVisual;
+    } else {
+        const displayW = parseFloat(canvas.style.width) || canvas.width;
+        const displayH = parseFloat(canvas.style.height) || canvas.height;
+        const box = getOverlayInnerBoxInternal(canvas.width, canvas.height, displayW, displayH);
+        imageBoxX = box.x;
+        imageBoxY = box.y;
+        imageBoxW = Math.max(1, box.width);
+        imageBoxH = Math.max(1, box.height);
+    }
+
+    for (let r = 0; r < qrSize; r++) {
+        for (let c = 0; c < qrSize; c++) {
+            const cell = pixelMap[r][c];
+            if (!cell || cell.type !== 'ec') continue;
+
+            const cx = qrStartX + (c + qrMargin) * moduleW + (moduleW / 2);
+            const cy = qrStartY + (r + qrMargin) * moduleH + (moduleH / 2);
+
+            const localX = Math.floor(((cx - imageBoxX) / imageBoxW) * sourceW);
+            const localY = Math.floor(((cy - imageBoxY) / imageBoxH) * sourceH);
+            if (localX < 0 || localY < 0 || localX >= sourceW || localY >= sourceH) continue;
+
+            const idx = (localY * sourceW + localX) * 4;
+            if (imgData.data[idx + 3] > 10) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 async function startLiveVideoPreview(token = previewSessionToken) {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoElement || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
     const video = uploadInfo.videoElement;
@@ -345,6 +429,7 @@ async function startLiveVideoPreview(token = previewSessionToken) {
 
     ensureGifPreviewCanvas(width, height);
     videoPreviewRunning = true;
+    const originalBytes = [...currentSuffixBytes];
 
     try {
         video.currentTime = 0;
@@ -353,10 +438,21 @@ async function startLiveVideoPreview(token = previewSessionToken) {
         return;
     }
 
-    const tick = () => {
+    const tick = async () => {
         if (!videoPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+        await waitNextVideoFrame(video, 400);
+        if (!videoPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+
         gifPreviewCtx.clearRect(0, 0, width, height);
         gifPreviewCtx.drawImage(video, 0, 0, width, height);
+
+        currentSuffixBytes = [...originalBytes];
+        if (lastWhitenMode === 'white') {
+            setSuffixUniform(0);
+        } else if (lastWhitenMode === 'black') {
+            setSuffixUniform(1);
+        }
+        await applyImport(false, gifPreviewCanvas, false, { skipArtisticPass: true });
         renderQR(false, gifPreviewCanvas);
 
         if (video.ended) {
@@ -366,9 +462,9 @@ async function startLiveVideoPreview(token = previewSessionToken) {
             } catch (_) {}
         }
 
-        videoPreviewRafId = requestAnimationFrame(tick);
+        videoPreviewRafId = requestAnimationFrame(() => { tick(); });
     };
-    videoPreviewRafId = requestAnimationFrame(tick);
+    videoPreviewRafId = requestAnimationFrame(() => { tick(); });
 }
 
 function startRenderedFramePreview(cache, token = previewSessionToken) {
@@ -441,7 +537,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     const frames = [];
     const originalBytes = [...currentSuffixBytes];
     computeCancelRequested = false;
-    suppressComputeOverlay = artisticOn;
+    suppressComputeOverlay = shouldShowProgress || artisticOn;
     if (shouldShowProgress) {
         showComputeOverlay('计算中...', reason, { showFrameProgress: true });
         setComputeProgress(0, totalFrames);
@@ -478,6 +574,13 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
                 await processSingleFrameCanvas(frameCanvas, forExport);
                 animatedFrameProgressContext = null;
             } else {
+                currentSuffixBytes = [...originalBytes];
+                if (lastWhitenMode === 'white') {
+                    setSuffixUniform(0);
+                } else if (lastWhitenMode === 'black') {
+                    setSuffixUniform(1);
+                }
+                await applyImport(false, frameCanvas, false, { skipArtisticPass: true });
                 renderQR(forExport, frameCanvas);
             }
             if (computeCancelRequested) return null;
@@ -5564,8 +5667,9 @@ function getCanvasContentOffsets() {
     };
 }
 
-async function applyImport(doSave = true, imageSource = previewImg, forceRecalc = false) {
+async function applyImport(doSave = true, imageSource = previewImg, forceRecalc = false, options = {}) {
     const hasExternalImageSource = !!imageSource && imageSource !== previewImg;
+    const skipArtisticPass = !!options.skipArtisticPass;
     if (!importState.active && !hasExternalImageSource) return;
     const basisMode = isImageBasisMode();
     const canvasRect = canvas.getBoundingClientRect();
@@ -5661,7 +5765,11 @@ async function applyImport(doSave = true, imageSource = previewImg, forceRecalc 
         if (directAnimatedRecompute) {
             await restartDynamicPreviewWithRecompute();
         } else {
-            await updateQR();
+            if (skipArtisticPass) {
+                await updateQR({ skipArtisticPass: true });
+            } else {
+                await updateQR();
+            }
             if (!hasExternalImageSource) {
                 await restartDynamicPreviewWithRecompute();
             }
