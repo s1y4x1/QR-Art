@@ -430,41 +430,76 @@ async function startLiveVideoPreview(token = previewSessionToken) {
     ensureGifPreviewCanvas(width, height);
     videoPreviewRunning = true;
     const originalBytes = [...currentSuffixBytes];
+    let processingFrame = false;
+    let lastVideoTime = -1;
 
     try {
+        video.loop = true;
+        video.playbackRate = 1;
         video.currentTime = 0;
         await video.play();
     } catch (_) {
-        return;
+        try {
+            await seekVideo(video, 0);
+        } catch (_) {
+            return;
+        }
     }
 
-    const tick = async () => {
+    function scheduleNext() {
         if (!videoPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
-        await waitNextVideoFrame(video, 400);
+        videoPreviewRafId = requestAnimationFrame(() => {
+            tick();
+        });
+    }
+
+    async function tick() {
         if (!videoPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
 
-        gifPreviewCtx.clearRect(0, 0, width, height);
-        gifPreviewCtx.drawImage(video, 0, 0, width, height);
-
-        currentSuffixBytes = [...originalBytes];
-        if (lastWhitenMode === 'white') {
-            setSuffixUniform(0);
-        } else if (lastWhitenMode === 'black') {
-            setSuffixUniform(1);
+        if (processingFrame) {
+            scheduleNext();
+            return;
         }
-        await applyImport(false, gifPreviewCanvas, false, { skipArtisticPass: true });
-        renderQR(false, gifPreviewCanvas);
+
+        const nowTime = Math.max(0, Number(video.currentTime) || 0);
+        if (!video.ended && Math.abs(nowTime - lastVideoTime) < 0.0005) {
+            scheduleNext();
+            return;
+        }
+
+        processingFrame = true;
+        try {
+            gifPreviewCtx.clearRect(0, 0, width, height);
+            gifPreviewCtx.drawImage(video, 0, 0, width, height);
+
+            currentSuffixBytes = [...originalBytes];
+            if (lastWhitenMode === 'white') {
+                setSuffixUniform(0);
+            } else if (lastWhitenMode === 'black') {
+                setSuffixUniform(1);
+            }
+            await applyImport(false, gifPreviewCanvas, false, { skipArtisticPass: true });
+            renderQR(false, gifPreviewCanvas);
+            if (previewImg) {
+                previewImg.src = gifPreviewCanvas.toDataURL('image/png');
+            }
+            lastVideoTime = nowTime;
+        } finally {
+            processingFrame = false;
+        }
 
         if (video.ended) {
             try {
                 video.currentTime = 0;
-                video.play();
+                await video.play();
+                lastVideoTime = -1;
             } catch (_) {}
         }
 
-        videoPreviewRafId = requestAnimationFrame(() => { tick(); });
-    };
-    videoPreviewRafId = requestAnimationFrame(() => { tick(); });
+        scheduleNext();
+    }
+
+    scheduleNext();
 }
 
 function startRenderedFramePreview(cache, token = previewSessionToken) {
@@ -538,6 +573,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     const originalBytes = [...currentSuffixBytes];
     computeCancelRequested = false;
     suppressComputeOverlay = shouldShowProgress || artisticOn;
+    const frameEpsilon = 1 / Math.max(120, fps * 4);
     if (shouldShowProgress) {
         showComputeOverlay('计算中...', reason, { showFrameProgress: true });
         setComputeProgress(0, totalFrames);
@@ -545,10 +581,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     }
 
     try {
-        try {
-            video.currentTime = 0;
-            await video.play();
-        } catch (_) {}
+        try { video.pause(); } catch (_) {}
 
         for (let i = 0; i < totalFrames; i++) {
             if (computeCancelRequested) return null;
@@ -557,17 +590,14 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
                 setFrameComputeProgress(0, 1);
             }
 
-            if (video.ended) {
-                await seekVideo(video, Math.min(duration - 0.001, i / fps));
-            } else {
-                await waitNextVideoFrame(video, Math.max(300, delay * 2));
-                if (Math.abs(video.currentTime) < 0.0001 && i > 0) {
-                    await seekVideo(video, Math.min(duration - 0.001, i / fps));
-                }
-            }
+            const targetTime = Math.min(Math.max(0, duration - frameEpsilon), i / fps);
+            await seekVideo(video, targetTime);
+
             if (computeCancelRequested) return null;
             fctx.clearRect(0, 0, width, height);
             fctx.drawImage(video, 0, 0, width, height);
+
+            const capturedTime = Math.min(duration, Math.max(0, Number(video.currentTime) || targetTime));
 
             if (artisticOn) {
                 animatedFrameProgressContext = { frameIndex: i, totalFrames };
@@ -587,6 +617,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
             frames.push({
                 imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
                 delay,
+                timeSec: capturedTime,
                 artisticStats: lastArtisticSolveStats ? { ...lastArtisticSolveStats } : null
             });
 
@@ -5019,15 +5050,26 @@ async function exportVideoBlob() {
         throw new Error('导出已取消');
     }
     const totalFrames = cache.frames.length;
-    const frameDelay = cache.frames[0] && cache.frames[0].delay ? cache.frames[0].delay : 33;
-    const fps = Math.max(1, Math.round(1000 / frameDelay));
+    const frameTimes = cache.frames.map((item, idx) => {
+        if (item && typeof item.timeSec === 'number' && Number.isFinite(item.timeSec)) {
+            return Math.max(0, item.timeSec);
+        }
+        const d = item && item.delay ? item.delay : 33;
+        return Math.max(0, idx * (d / 1000));
+    });
+    const durationEstimate = Math.max(
+        0.01,
+        srcVideo.duration || uploadInfo.videoDuration || frameTimes[frameTimes.length - 1] || (totalFrames / 30)
+    );
+    const streamFps = Math.max(1, Math.min(60, Math.round(totalFrames / durationEstimate)));
+    const frameDelay = Math.max(10, Math.round(1000 / streamFps));
 
     const outputCanvas = document.createElement('canvas');
     outputCanvas.width = Math.max(1, canvas.width);
     outputCanvas.height = Math.max(1, canvas.height);
     const octx = outputCanvas.getContext('2d', { willReadFrequently: true });
 
-    const stream = outputCanvas.captureStream(fps);
+    const stream = outputCanvas.captureStream(streamFps);
     let audioTrack = null;
     try {
         const audioStream = srcVideo.captureStream ? srcVideo.captureStream() : null;
@@ -5063,15 +5105,16 @@ async function exportVideoBlob() {
         const item = cache.frames[idx];
         octx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
         if (item && item.imageData) {
-            ctx.putImageData(item.imageData, 0, 0);
+            octx.putImageData(item.imageData, 0, 0);
         }
-        octx.drawImage(canvas, 0, 0, outputCanvas.width, outputCanvas.height);
     };
 
     try {
-        const duration = Math.max(0.01, srcVideo.duration || uploadInfo.videoDuration || (totalFrames / fps));
+        const duration = durationEstimate;
         let lastIndex = -1;
+        let cursor = 0;
         try {
+            srcVideo.playbackRate = 1;
             srcVideo.currentTime = 0;
             await srcVideo.play();
         } catch (_) {}
@@ -5082,13 +5125,15 @@ async function exportVideoBlob() {
             }
 
             const ct = Math.max(0, srcVideo.currentTime || 0);
-            const frameIndex = Math.min(totalFrames - 1, Math.max(0, Math.floor(ct * fps)));
-            if (frameIndex !== lastIndex) {
-                paintFrameByIndex(frameIndex);
-                lastIndex = frameIndex;
+            while (cursor + 1 < totalFrames && frameTimes[cursor + 1] <= ct + 0.0005) {
+                cursor += 1;
+            }
+            if (cursor !== lastIndex) {
+                paintFrameByIndex(cursor);
+                lastIndex = cursor;
             }
 
-            if (srcVideo.ended || ct >= duration - (1 / Math.max(2, fps))) {
+            if (srcVideo.ended || ct >= duration - (1 / Math.max(2, streamFps))) {
                 break;
             }
 
