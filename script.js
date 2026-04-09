@@ -322,13 +322,53 @@ function setStaticGifPreview() {
 
 async function startVideoPreview(token = previewSessionToken) {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoElement || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
-    const cache = await processVideoFramesForPreview('正在逐帧计算动态预览');
+    const artisticOn = !!(artisticModeCb && artisticModeCb.checked);
+    if (!artisticOn) {
+        await startLiveVideoPreview(token);
+        return;
+    }
+    const cache = await processVideoFramesForPreview('正在逐帧计算动态预览', { forExport: false, artisticOn: true });
     if (token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
     if (!cache || !cache.frames || !cache.frames.length) {
         dynamicPreviewCb.checked = false;
         return;
     }
     startRenderedFramePreview(cache, token);
+}
+
+async function startLiveVideoPreview(token = previewSessionToken) {
+    if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoElement || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+    const video = uploadInfo.videoElement;
+    const width = video.videoWidth || uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
+    const height = video.videoHeight || uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
+    if (width <= 0 || height <= 0) return;
+
+    ensureGifPreviewCanvas(width, height);
+    videoPreviewRunning = true;
+
+    try {
+        video.currentTime = 0;
+        await video.play();
+    } catch (_) {
+        return;
+    }
+
+    const tick = () => {
+        if (!videoPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+        gifPreviewCtx.clearRect(0, 0, width, height);
+        gifPreviewCtx.drawImage(video, 0, 0, width, height);
+        renderQR(false, gifPreviewCanvas);
+
+        if (video.ended) {
+            try {
+                video.currentTime = 0;
+                video.play();
+            } catch (_) {}
+        }
+
+        videoPreviewRafId = requestAnimationFrame(tick);
+    };
+    videoPreviewRafId = requestAnimationFrame(tick);
 }
 
 function startRenderedFramePreview(cache, token = previewSessionToken) {
@@ -349,9 +389,13 @@ function startRenderedFramePreview(cache, token = previewSessionToken) {
     tick();
 }
 
-async function processVideoFramesForPreview(reason = '正在处理视频帧') {
+async function processVideoFramesForPreview(reason = '正在处理视频帧', options = {}) {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoObjectUrl) return null;
     const cacheKey = `${getAnimatedArtCacheKey()}::video-preview`;
+    const forExport = !!options.forExport;
+    const artisticOn = options.artisticOn !== undefined
+        ? !!options.artisticOn
+        : !!(artisticModeCb && artisticModeCb.checked);
     if (animatedArtCache && animatedArtCache.key === cacheKey && animatedArtCache.frames && animatedArtCache.frames.length) {
         return animatedArtCache;
     }
@@ -387,7 +431,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
     const duration = Math.max(0.01, video.duration || uploadInfo.videoDuration || 0.01);
     const totalFrames = Math.max(1, Math.floor(duration * fps));
     const delay = Math.max(10, Math.round(1000 / fps));
-    const shouldShowProgress = totalFrames > 20;
+    const shouldShowProgress = forExport ? true : (artisticOn && totalFrames > 20);
 
     const frameCanvas = document.createElement('canvas');
     frameCanvas.width = width;
@@ -397,9 +441,9 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
     const frames = [];
     const originalBytes = [...currentSuffixBytes];
     computeCancelRequested = false;
-    suppressComputeOverlay = true;
+    suppressComputeOverlay = artisticOn;
     if (shouldShowProgress) {
-        showComputeOverlay('计算中...', reason);
+        showComputeOverlay('计算中...', reason, { showFrameProgress: true });
         setComputeProgress(0, totalFrames);
         setFrameComputeProgress(0, 1);
     }
@@ -413,7 +457,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
         for (let i = 0; i < totalFrames; i++) {
             if (computeCancelRequested) return null;
             if (shouldShowProgress) {
-                if (computeSubtitle) computeSubtitle.textContent = `${reason}（${i + 1}/${totalFrames}）`;
+                if (computeSubtitle) computeSubtitle.textContent = reason;
                 setFrameComputeProgress(0, 1);
             }
 
@@ -429,9 +473,13 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
             fctx.clearRect(0, 0, width, height);
             fctx.drawImage(video, 0, 0, width, height);
 
-            animatedFrameProgressContext = { frameIndex: i, totalFrames };
-            await processSingleFrameCanvas(frameCanvas, false);
-            animatedFrameProgressContext = null;
+            if (artisticOn) {
+                animatedFrameProgressContext = { frameIndex: i, totalFrames };
+                await processSingleFrameCanvas(frameCanvas, false);
+                animatedFrameProgressContext = null;
+            } else {
+                renderQR(false, frameCanvas);
+            }
             if (computeCancelRequested) return null;
             frames.push({
                 imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
@@ -4760,30 +4808,53 @@ async function exportGifBlob() {
     frameRenderer.reset();
 
     const originalBytes = [...currentSuffixBytes];
-
-    for (let idx = 0; idx < uploadInfo.gifFrames.length; idx++) {
-        const frame = uploadInfo.gifFrames[idx];
-        const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[idx];
-        if (fullFrame) {
-            drawFullFrameToCanvas(fullFrame, fctx, frameCanvas);
-        } else {
-            frameRenderer.draw(frame);
-        }
-
-        currentSuffixBytes = [...originalBytes];
-        if (lastWhitenMode === 'white') {
-            setSuffixUniform(0);
-        } else if (lastWhitenMode === 'black') {
-            setSuffixUniform(1);
-        }
-        applyImport(false, frameCanvas);
-        renderQR(true, frameCanvas);
-        const delay = fullFrame ? Math.max(10, fullFrame.delay || 10) : getGifFrameDelayMs(frame);
-        gif.addFrame(canvas, { copy: true, delay });
+    const totalFrames = uploadInfo.gifFrames.length;
+    const shouldShowProgress = totalFrames > 20;
+    if (shouldShowProgress) {
+        showComputeOverlay('计算中...', '正在逐帧计算导出内容', { showFrameProgress: true });
+        setComputeProgress(0, totalFrames);
+        setFrameComputeProgress(0, 1);
     }
 
-    currentSuffixBytes = [...originalBytes];
-    updateQR();
+    try {
+        for (let idx = 0; idx < totalFrames; idx++) {
+            if (computeCancelRequested) {
+                throw new Error('导出已取消');
+            }
+            if (shouldShowProgress) {
+                if (computeSubtitle) computeSubtitle.textContent = '正在逐帧计算导出内容';
+                setFrameComputeProgress(0, 1);
+            }
+
+            const frame = uploadInfo.gifFrames[idx];
+            const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[idx];
+            if (fullFrame) {
+                drawFullFrameToCanvas(fullFrame, fctx, frameCanvas);
+            } else {
+                frameRenderer.draw(frame);
+            }
+
+            currentSuffixBytes = [...originalBytes];
+            if (lastWhitenMode === 'white') {
+                setSuffixUniform(0);
+            } else if (lastWhitenMode === 'black') {
+                setSuffixUniform(1);
+            }
+            await applyImport(false, frameCanvas);
+            renderQR(true, frameCanvas);
+            const delay = fullFrame ? Math.max(10, fullFrame.delay || 10) : getGifFrameDelayMs(frame);
+            gif.addFrame(canvas, { copy: true, delay });
+
+            if (shouldShowProgress) {
+                setFrameComputeProgress(1, 1);
+                setComputeProgress(idx + 1, totalFrames);
+            }
+        }
+    } finally {
+        currentSuffixBytes = [...originalBytes];
+        updateQR();
+        if (shouldShowProgress) hideComputeOverlay();
+    }
 
     return await new Promise((resolve) => {
         gif.on('finished', (blob) => resolve(blob));
@@ -4837,7 +4908,10 @@ async function exportVideoBlob() {
         srcVideo.addEventListener('error', onError, { once: true });
     });
 
-    const cache = await processVideoFramesForPreview('正在逐帧计算导出内容');
+    const cache = await processVideoFramesForPreview('正在逐帧计算导出内容', {
+        forExport: true,
+        artisticOn: !!(artisticModeCb && artisticModeCb.checked)
+    });
     if (!cache || !cache.frames || !cache.frames.length) {
         throw new Error('导出已取消');
     }
