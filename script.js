@@ -138,6 +138,8 @@ function drawFullFrameToCanvas(fullFrame, ctx, canvas) {
 }
 
 function stopGifPreview() {
+    previewSessionToken += 1;
+    computeCancelRequested = true;
     if (gifPreviewTimer) {
         clearTimeout(gifPreviewTimer);
         gifPreviewTimer = null;
@@ -318,23 +320,24 @@ function setStaticGifPreview() {
     previewImg.src = gifPreviewCanvas.toDataURL('image/png');
 }
 
-async function startVideoPreview() {
+async function startVideoPreview(token = previewSessionToken) {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoElement || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
     const cache = await processVideoFramesForPreview('正在逐帧计算动态预览');
+    if (token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
     if (!cache || !cache.frames || !cache.frames.length) {
         dynamicPreviewCb.checked = false;
         return;
     }
-    startRenderedFramePreview(cache);
+    startRenderedFramePreview(cache, token);
 }
 
-function startRenderedFramePreview(cache) {
+function startRenderedFramePreview(cache, token = previewSessionToken) {
     if (!cache || !cache.frames || !cache.frames.length) return;
     gifPreviewIndex = 0;
     gifPreviewRunning = true;
 
     const tick = () => {
-        if (!gifPreviewRunning) return;
+        if (!gifPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
         const item = cache.frames[gifPreviewIndex];
         if (item && item.imageData) {
             ctx.putImageData(item.imageData, 0, 0);
@@ -394,6 +397,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
     const frames = [];
     const originalBytes = [...currentSuffixBytes];
     computeCancelRequested = false;
+    suppressComputeOverlay = true;
     if (shouldShowProgress) {
         showComputeOverlay('计算中...', reason);
         setComputeProgress(0, totalFrames);
@@ -421,10 +425,14 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
                     await seekVideo(video, Math.min(duration - 0.001, i / fps));
                 }
             }
+            if (computeCancelRequested) return null;
             fctx.clearRect(0, 0, width, height);
             fctx.drawImage(video, 0, 0, width, height);
 
+            animatedFrameProgressContext = { frameIndex: i, totalFrames };
             await processSingleFrameCanvas(frameCanvas, false);
+            animatedFrameProgressContext = null;
+            if (computeCancelRequested) return null;
             frames.push({
                 imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
                 delay,
@@ -442,6 +450,8 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
     } finally {
         try { video.pause(); } catch (_) {}
         currentSuffixBytes = [...originalBytes];
+        animatedFrameProgressContext = null;
+        suppressComputeOverlay = false;
         renderQR(false);
         if (shouldShowProgress) hideComputeOverlay();
     }
@@ -615,7 +625,7 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
     }
 }
 
-function startCachedGifPreview(cache) {
+function startCachedGifPreview(cache, token = previewSessionToken) {
     if (!cache || !cache.frames || !cache.frames.length) return;
     const width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
     const height = uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
@@ -626,7 +636,7 @@ function startCachedGifPreview(cache) {
     gifPreviewRunning = true;
 
     const tick = () => {
-        if (!gifPreviewRunning) return;
+        if (!gifPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
         const frame = uploadInfo.gifFrames[gifPreviewIndex];
         const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[gifPreviewIndex];
         if (fullFrame) {
@@ -657,9 +667,11 @@ function startCachedGifPreview(cache) {
 
 async function startGifPreview() {
     if (!uploadInfo || !uploadInfo.isAnimated || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+    const token = ++previewSessionToken;
+    computeCancelRequested = false;
 
     if (uploadInfo.isVideo) {
-        await startVideoPreview();
+        await startVideoPreview(token);
         return;
     }
 
@@ -667,11 +679,12 @@ async function startGifPreview() {
 
     if (artisticModeCb && artisticModeCb.checked) {
         const cache = await processAnimatedFramesForArt('正在逐帧计算动态预览');
+        if (token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
         if (!cache) {
             dynamicPreviewCb.checked = false;
             return;
         }
-        startCachedGifPreview(cache);
+        startCachedGifPreview(cache, token);
         return;
     }
 
@@ -686,7 +699,7 @@ async function startGifPreview() {
     const originalBytes = [...currentSuffixBytes];
 
     const tick = () => {
-        if (!gifPreviewRunning) return;
+        if (!gifPreviewRunning || token !== previewSessionToken || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
         const frame = uploadInfo.gifFrames[gifPreviewIndex];
         const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[gifPreviewIndex];
         if (fullFrame) {
@@ -734,6 +747,7 @@ let gifPreviewCtx = null;
 let gifPreviewPrevImageData = null;
 let videoPreviewRafId = null;
 let videoPreviewRunning = false;
+let previewSessionToken = 0;
 let lastCopiedAnimatedUrl = null;
 
 // History & Zoom
@@ -1596,7 +1610,7 @@ function init() {
                 startGifPreview();
             } else {
                 stopGifPreview();
-                if (uploadInfo && uploadInfo.isAnimated && uploadInfo.gifFrames) {
+                if (uploadInfo && uploadInfo.isAnimated && (uploadInfo.gifFrames || uploadInfo.isVideo)) {
                     setStaticGifPreview();
                 }
                 renderQR(false);
