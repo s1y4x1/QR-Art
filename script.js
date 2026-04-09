@@ -298,7 +298,7 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
     const originalQrSnapshot = snapshotQrDarkMatrix(generatedQR);
     const frames = [];
     computeCancelRequested = false;
-    showComputeOverlay('计算中...', reason);
+    showComputeOverlay('计算中...', reason, { showFrameProgress: true });
     setComputeProgress(0, totalFrames);
     setFrameComputeProgress(0, 1);
 
@@ -324,6 +324,7 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
                 setSuffixUniform(1);
             }
 
+            animatedFrameProgressContext = { frameIndex: idx, totalFrames };
             optimizationImageSourceOverride = frameCanvas;
             await applyImport(false, frameCanvas, true);
             if (computeCancelRequested) return null;
@@ -346,6 +347,7 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
             });
             setComputeProgress(idx + 1, totalFrames);
             setFrameComputeProgress(1, 1);
+            animatedFrameProgressContext = null;
         }
 
         animatedArtCache = { key: cacheKey, frames };
@@ -353,6 +355,7 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
     } finally {
         optimizationImageSourceOverride = null;
         suppressComputeOverlay = false;
+        animatedFrameProgressContext = null;
         currentSuffixBytes = [...originalBytes];
         const restoredQr = createQrFromSnapshot(originalQrSnapshot);
         if (restoredQr) {
@@ -532,6 +535,7 @@ const computeTitle = document.getElementById('compute-title');
 const computeSubtitle = document.getElementById('compute-subtitle');
 const computeProgressBar = document.getElementById('compute-progress-bar');
 const computeProgressText = document.getElementById('compute-progress-text');
+const computeFrameProgressGroup = document.getElementById('compute-frame-progress-group');
 const computeFrameProgressBar = document.getElementById('compute-frame-progress-bar');
 const computeFrameProgressText = document.getElementById('compute-frame-progress-text');
 const computeCancelBtn = document.getElementById('compute-cancel-btn');
@@ -589,6 +593,7 @@ let dynamicPreviewRestartNonce = 0;
 let computeProgressStartMs = 0;
 let computeProgressLastDone = 0;
 let computeProgressLastTotal = 1;
+let animatedFrameProgressContext = null;
 
 function isImageBasisMode() {
     return !!(imageBasisCb && !imageBasisCb.disabled && imageBasisCb.checked && hasImageUpload);
@@ -2364,8 +2369,9 @@ function formatProgressCount(value) {
     return `${Math.round(value * 10) / 10}`;
 }
 
-function showComputeOverlay(titleText, subtitleText) {
+function showComputeOverlay(titleText, subtitleText, options = {}) {
     if (!computeOverlay) return;
+    const showFrameProgress = !!options.showFrameProgress;
     computeCancelRequested = false;
     computeProgressStartMs = performance.now();
     computeProgressLastDone = 0;
@@ -2375,6 +2381,7 @@ function showComputeOverlay(titleText, subtitleText) {
     if (computeSubtitle) computeSubtitle.textContent = subtitleText || '正在处理';
     if (computeProgressBar) computeProgressBar.style.width = '0%';
     if (computeProgressText) computeProgressText.textContent = '0% (0/1) · 预计剩余 --:--';
+    if (computeFrameProgressGroup) computeFrameProgressGroup.style.display = showFrameProgress ? 'block' : 'none';
     if (computeFrameProgressBar) computeFrameProgressBar.style.width = '0%';
     if (computeFrameProgressText) computeFrameProgressText.textContent = '0% (0/1)';
 }
@@ -3449,6 +3456,12 @@ async function updateQR(options = {}) {
                 onProgress: (done, total) => {
                     if (suppressComputeOverlay) {
                         setFrameComputeProgress(done, total);
+                        if (animatedFrameProgressContext && animatedFrameProgressContext.totalFrames > 0) {
+                            const t = Math.max(1, total || 1);
+                            const d = Math.max(0, Math.min(t, done || 0));
+                            const overallDone = animatedFrameProgressContext.frameIndex + (d / t);
+                            setComputeProgress(overallDone, animatedFrameProgressContext.totalFrames);
+                        }
                     } else {
                         setComputeProgress(done, total);
                         setFrameComputeProgress(done, total);
