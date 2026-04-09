@@ -270,13 +270,23 @@ h1 {
     color: #4b5563;
 }
 
+.compute-progress-label {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
 .compute-progress-wrap {
-    margin-top: 14px;
+    margin-top: 6px;
     width: 100%;
     height: 10px;
     border-radius: 999px;
     background: #e5e7eb;
     overflow: hidden;
+}
+
+.compute-progress-wrap-secondary {
+    background: #dbeafe;
 }
 
 .compute-progress-bar {
@@ -286,8 +296,12 @@ h1 {
     transition: width 0.15s ease;
 }
 
+.compute-progress-bar-secondary {
+    background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+}
+
 .compute-progress-text {
-    margin-top: 8px;
+    margin-top: 6px;
     font-size: 12px;
     color: #374151;
 }

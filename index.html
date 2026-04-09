@@ -51,7 +51,7 @@
                 <label>模块尺寸 (Px):</label>
                 <div class="cell-size-control">
                     <input type="number" id="cell-size-input" value="8" min="0.1" max="50" step="0.1" style="width: 60px;">
-                    <button id="cell-size-auto-btn" type="button" class="mask-btn" style="display: none;">自动（图片原大小）</button>
+                    <button id="cell-size-auto-btn" type="button" class="mask-btn" style="display: none;">自动(图片原大小)</button>
                 </div>
             </div>
 
@@ -77,7 +77,7 @@
             </div>
 
             <div class="control-group compact-dropdown-row">
-                <label>码眼样式:</label>
+                <label>定位图形(大):</label>
                 <details class="option-dropdown">
                     <summary id="finder-style-summary">经典</summary>
                     <div class="style-gallery" id="finder-style-gallery">
@@ -89,6 +89,27 @@
                     </div>
                 </details>
                 <select id="finder-style" style="display:none;">
+                    <option value="classic" selected>经典</option>
+                    <option value="circle">圆形</option>
+                    <option value="polar-day">极昼</option>
+                    <option value="polar-night">极夜</option>
+                    <option value="aurora">极光</option>
+                </select>
+            </div>
+
+            <div class="control-group compact-dropdown-row">
+                <label>校正图形(小):</label>
+                <details class="option-dropdown">
+                    <summary id="align-style-summary">经典</summary>
+                    <div class="style-gallery" id="align-style-gallery">
+                        <button class="style-item style-btn active" data-style-target="align" data-style="classic" type="button"><canvas data-style-preview="align-classic" width="224" height="224"></canvas><div class="style-name">经典</div></button>
+                        <button class="style-item style-btn" data-style-target="align" data-style="circle" type="button"><canvas data-style-preview="align-circle" width="224" height="224"></canvas><div class="style-name">圆形</div></button>
+                        <button class="style-item style-btn" data-style-target="align" data-style="polar-day" type="button"><canvas data-style-preview="align-polar-day" width="224" height="224"></canvas><div class="style-name">极昼</div></button>
+                        <button class="style-item style-btn" data-style-target="align" data-style="polar-night" type="button"><canvas data-style-preview="align-polar-night" width="224" height="224"></canvas><div class="style-name">极夜</div></button>
+                        <button class="style-item style-btn" data-style-target="align" data-style="aurora" type="button"><canvas data-style-preview="align-aurora" width="224" height="224"></canvas><div class="style-name">极光</div></button>
+                    </div>
+                </details>
+                <select id="alignment-style" style="display:none;">
                     <option value="classic" selected>经典</option>
                     <option value="circle">圆形</option>
                     <option value="polar-day">极昼</option>
@@ -171,7 +192,7 @@
                 </div>
 
                 <div class="control-group" style="padding-top: 6px; margin-top: 4px;">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="image-basis-cb" disabled>
                         <span>以图片为基准</span>
                     </label>
@@ -233,10 +254,16 @@
         <div class="compute-card">
             <div id="compute-title" class="compute-title">计算中...</div>
             <div id="compute-subtitle" class="compute-subtitle">正在拟合纠错码区</div>
+            <div class="compute-progress-label">总进度</div>
             <div class="compute-progress-wrap">
                 <div id="compute-progress-bar" class="compute-progress-bar"></div>
             </div>
             <div id="compute-progress-text" class="compute-progress-text">0%</div>
+            <div class="compute-progress-label">当前帧进度</div>
+            <div class="compute-progress-wrap compute-progress-wrap-secondary">
+                <div id="compute-frame-progress-bar" class="compute-progress-bar compute-progress-bar-secondary"></div>
+            </div>
+            <div id="compute-frame-progress-text" class="compute-progress-text">0%</div>
             <button id="compute-cancel-btn" type="button" class="mask-btn">取消</button>
         </div>
     </div>

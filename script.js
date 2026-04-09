@@ -174,7 +174,7 @@ function updateAutoCellSizeButtonLabel() {
     if (!importState.active || !hasImageUpload) return;
     const candidate = getAutoCellSizeCandidate();
     if (!candidate) return;
-    cellSizeAutoBtn.textContent = `自动（约${candidate.toFixed(1)}）`;
+    cellSizeAutoBtn.textContent = `自动(${candidate.toFixed(1)})`;
 }
 
 function refreshCellSizeAutoButtonVisibility() {
@@ -227,6 +227,21 @@ function getAnimatedArtCacheKey() {
 
 function invalidateAnimatedArtCache() {
     animatedArtCache = null;
+}
+
+function shouldDirectAnimatedRecompute() {
+    return !!(
+        dynamicPreviewCb &&
+        dynamicPreviewCb.checked &&
+        uploadInfo &&
+        uploadInfo.isAnimated &&
+        uploadInfo.gifFrames &&
+        uploadInfo.gifFrames.length &&
+        artisticModeCb &&
+        artisticModeCb.checked &&
+        hasImageUpload &&
+        importState.active
+    );
 }
 
 async function restartDynamicPreviewWithRecompute() {
@@ -285,12 +300,14 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
     computeCancelRequested = false;
     showComputeOverlay('计算中...', reason);
     setComputeProgress(0, totalFrames);
+    setFrameComputeProgress(0, 1);
 
     suppressComputeOverlay = true;
     try {
         for (let idx = 0; idx < totalFrames; idx++) {
             if (computeCancelRequested) return null;
             if (computeSubtitle) computeSubtitle.textContent = `${reason}（${idx + 1}/${totalFrames}）`;
+            setFrameComputeProgress(0, 1);
 
             const frame = uploadInfo.gifFrames[idx];
             const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[idx];
@@ -311,12 +328,24 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
             await applyImport(false, frameCanvas, true);
             if (computeCancelRequested) return null;
 
+            const frameStats = lastArtisticSolveStats
+                ? {
+                    ...lastArtisticSolveStats,
+                    hasTargets: !!lastArtisticSolveStats.hasTargets,
+                    remainingMismatch: Number(lastArtisticSolveStats.remainingMismatch || 0),
+                    totalTargets: Number(lastArtisticSolveStats.totalTargets || 0),
+                    coveredFreedomUsed: Number(lastArtisticSolveStats.coveredFreedomUsed || 0)
+                }
+                : null;
+
             frames.push({
                 suffixBytes: [...currentSuffixBytes],
                 qrSnapshot: snapshotQrDarkMatrix(generatedQR),
+                artisticStats: frameStats,
                 delay: fullFrame ? Math.max(10, fullFrame.delay || 10) : getGifFrameDelayMs(frame)
             });
             setComputeProgress(idx + 1, totalFrames);
+            setFrameComputeProgress(1, 1);
         }
 
         animatedArtCache = { key: cacheKey, frames };
@@ -363,6 +392,7 @@ function startCachedGifPreview(cache) {
         }
         currentSuffixBytes = item.suffixBytes ? [...item.suffixBytes] : prevBytes;
         renderQR(false, gifPreviewCanvas);
+        updateArtisticWarning(item.artisticStats || null);
         generatedQR = prevQr;
         currentSuffixBytes = prevBytes;
 
@@ -502,6 +532,8 @@ const computeTitle = document.getElementById('compute-title');
 const computeSubtitle = document.getElementById('compute-subtitle');
 const computeProgressBar = document.getElementById('compute-progress-bar');
 const computeProgressText = document.getElementById('compute-progress-text');
+const computeFrameProgressBar = document.getElementById('compute-frame-progress-bar');
+const computeFrameProgressText = document.getElementById('compute-frame-progress-text');
 const computeCancelBtn = document.getElementById('compute-cancel-btn');
 const eccSelect = document.getElementById('ecc-level');
 const verRange = document.getElementById('version-range');
@@ -525,11 +557,14 @@ const artisticModeCb = document.getElementById('artistic-mode');
 const allowCoveredFreedomCb = document.getElementById('allow-covered-freedom');
 const moduleStyleSelect = document.getElementById('module-style');
 const finderStyleSelect = document.getElementById('finder-style');
+const alignmentStyleSelect = document.getElementById('alignment-style');
 const moduleStyleSummary = document.getElementById('module-style-summary');
 const finderStyleSummary = document.getElementById('finder-style-summary');
+const alignStyleSummary = document.getElementById('align-style-summary');
 const maskModeSummary = document.getElementById('mask-mode-summary');
 const moduleStyleButtons = document.querySelectorAll('.style-btn[data-style-target="module"]');
 const finderStyleButtons = document.querySelectorAll('.style-btn[data-style-target="finder"]');
+const alignStyleButtons = document.querySelectorAll('.style-btn[data-style-target="align"]');
 const imageSizeGroup = document.getElementById('image-size-group');
 const imageSizeWInput = document.getElementById('img-size-w');
 const imageSizeHInput = document.getElementById('img-size-h');
@@ -539,6 +574,7 @@ let CELL_SIZE = 8;
 let qrMargin = 1;
 let moduleStyle = 'square';
 let finderStyle = 'classic';
+let alignStyle = 'classic';
 let lastNonBasisImportRect = null;
 let basisImageWidth = 0;
 let basisImageHeight = 0;
@@ -854,7 +890,7 @@ function drawBullseye(drawCtx, cx, cy, moduleSize, outerModules, innerModules, c
     drawCtx.fill();
 }
 
-function drawCircleFinderStyle(drawCtx, count, qrOriginX, qrOriginY, moduleW, moduleH, fgColor, bgColor) {
+function drawCircleFinderStyle(drawCtx, count, qrOriginX, qrOriginY, moduleW, moduleH, fgColor, bgColor, drawFinder = true, drawAlign = true) {
     const unit = Math.min(moduleW, moduleH);
     const offsetX = (moduleW - unit) / 2;
     const offsetY = (moduleH - unit) / 2;
@@ -865,22 +901,26 @@ function drawCircleFinderStyle(drawCtx, count, qrOriginX, qrOriginY, moduleW, mo
         { r: count - 7, c: 0 }
     ];
 
-    finderStarts.forEach((pos) => {
-        const x0 = qrOriginX + (pos.c + qrMargin) * moduleW + offsetX;
-        const y0 = qrOriginY + (pos.r + qrMargin) * moduleH + offsetY;
-        const cx = x0 + 3.5 * unit;
-        const cy = y0 + 3.5 * unit;
-        drawBullseye(drawCtx, cx, cy, unit, 7, 5, 3, fgColor, bgColor);
-    });
+    if (drawFinder) {
+        finderStarts.forEach((pos) => {
+            const x0 = qrOriginX + (pos.c + qrMargin) * moduleW + offsetX;
+            const y0 = qrOriginY + (pos.r + qrMargin) * moduleH + offsetY;
+            const cx = x0 + 3.5 * unit;
+            const cy = y0 + 3.5 * unit;
+            drawBullseye(drawCtx, cx, cy, unit, 7, 5, 3, fgColor, bgColor);
+        });
+    }
 
-    const alignCenters = getAlignmentCenters(count);
-    alignCenters.forEach((ac) => {
-        const x0 = qrOriginX + (ac.c - 2 + qrMargin) * moduleW + offsetX;
-        const y0 = qrOriginY + (ac.r - 2 + qrMargin) * moduleH + offsetY;
-        const cx = x0 + 2.5 * unit;
-        const cy = y0 + 2.5 * unit;
-        drawBullseye(drawCtx, cx, cy, unit, 5, 3, 1, fgColor, bgColor);
-    });
+    if (drawAlign) {
+        const alignCenters = getAlignmentCenters(count);
+        alignCenters.forEach((ac) => {
+            const x0 = qrOriginX + (ac.c - 2 + qrMargin) * moduleW + offsetX;
+            const y0 = qrOriginY + (ac.r - 2 + qrMargin) * moduleH + offsetY;
+            const cx = x0 + 2.5 * unit;
+            const cy = y0 + 2.5 * unit;
+            drawBullseye(drawCtx, cx, cy, unit, 5, 3, 1, fgColor, bgColor);
+        });
+    }
 }
 
 function refreshImageSizeControlVisibility() {
@@ -1212,6 +1252,16 @@ function init() {
         });
     }
 
+    if (alignmentStyleSelect) {
+        alignStyle = alignmentStyleSelect.value || alignStyle;
+        alignmentStyleSelect.addEventListener('change', () => {
+            alignStyle = alignmentStyleSelect.value;
+            syncStyleButtonState('align');
+            updateOptionSummaries();
+            renderQR(false);
+        });
+    }
+
     if (imageSizeWInput) {
         imageSizeWInput.addEventListener('change', async () => {
             if (!importState.active) return;
@@ -1307,6 +1357,11 @@ function init() {
                     if (isImageBasisMode()) {
                         scaleBasisScene(ratio);
                         syncCellSizeFromBasisBox();
+                    } else {
+                        importState.width *= ratio;
+                        importState.height *= ratio;
+                        importState.relX *= ratio;
+                        importState.relY *= ratio;
                     }
                     importState.x = canvas.offsetLeft + importState.relX;
                     importState.y = canvas.offsetTop + importState.relY;
@@ -1323,9 +1378,12 @@ function init() {
     }
 
     if (cellSizeAutoBtn) {
-        cellSizeAutoBtn.addEventListener('click', () => {
+        cellSizeAutoBtn.addEventListener('click', async () => {
             applyOriginalImageSize();
             renderQR(false);
+            if (importState.active && hasImageUpload) {
+                await applyImport(false, previewImg, true);
+            }
         });
     }
 
@@ -1364,6 +1422,10 @@ function init() {
         // On text change, we keep suffix bytes if possible?
         // No, size changes, validation changes. Clear suffix.
         resetSuffix();
+        if (shouldDirectAnimatedRecompute()) {
+            await restartDynamicPreviewWithRecompute();
+            return;
+        }
         if (hasImageUpload && importState.active) {
             await updateQR({ skipArtisticPass: true });
             await refitImageAfterQrUpdate(true);
@@ -1375,6 +1437,10 @@ function init() {
     eccSelect.addEventListener('change', async (e) => {
         eccLevel = e.target.value;
         resetSuffix();
+        if (shouldDirectAnimatedRecompute()) {
+            await restartDynamicPreviewWithRecompute();
+            return;
+        }
         await updateQR({ skipArtisticPass: true });
         await refitImageAfterQrUpdate(true);
     });
@@ -1391,6 +1457,10 @@ function init() {
 
         // verDisplay.textContent = version === 0 ? "鑷姩" : version; // Removed span
         resetSuffix();
+        if (shouldDirectAnimatedRecompute()) {
+            await restartDynamicPreviewWithRecompute();
+            return;
+        }
         await updateQR({ skipArtisticPass: true });
         await refitImageAfterQrUpdate(true);
     });
@@ -1409,6 +1479,10 @@ function init() {
             verRange.value = val;
             
             resetSuffix();
+            if (shouldDirectAnimatedRecompute()) {
+                await restartDynamicPreviewWithRecompute();
+                return;
+            }
             await updateQR({ skipArtisticPass: true });
             await refitImageAfterQrUpdate(true);
         });
@@ -1419,6 +1493,10 @@ function init() {
     encodingSelect.addEventListener('change', async (e) => {
         encodingMode = e.target.value;
         resetSuffix();
+        if (shouldDirectAnimatedRecompute()) {
+            await restartDynamicPreviewWithRecompute();
+            return;
+        }
         if (hasImageUpload && importState.active) {
             await updateQR({ skipArtisticPass: true });
             await refitImageAfterQrUpdate(true);
@@ -1538,6 +1616,10 @@ function init() {
                  allowCoveredFreedomCb.disabled = !artCheck.checked;
                  if (!artCheck.checked) allowCoveredFreedomCb.checked = false;
              }
+             if (shouldDirectAnimatedRecompute()) {
+                 await restartDynamicPreviewWithRecompute();
+                 return;
+             }
              await updateQR();
              await restartDynamicPreviewWithRecompute();
         });
@@ -1546,6 +1628,10 @@ function init() {
     if (allowCoveredFreedomCb) {
         allowCoveredFreedomCb.addEventListener('change', async () => {
             resetSuffix();
+            if (shouldDirectAnimatedRecompute()) {
+                await restartDynamicPreviewWithRecompute();
+                return;
+            }
             await updateQR({ skipArtisticPass: true });
             await refitImageAfterQrUpdate(true);
         });
@@ -1602,6 +1688,7 @@ function init() {
     setupStyleGalleryButtons();
     syncStyleButtonState('module');
     syncStyleButtonState('finder');
+    syncStyleButtonState('align');
     updateMaskControls();
     updateOptionSummaries();
     refreshImageSizeControlVisibility();
@@ -1802,14 +1889,12 @@ function applyOriginalImageSize() {
     CELL_SIZE = targetSize;
     const cellSizeInput = document.getElementById('cell-size-input');
     if (cellSizeInput) cellSizeInput.value = targetSize.toFixed(1);
-    if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `自动（约${targetSize.toFixed(1)}）`;
+    if (cellSizeAutoBtn) cellSizeAutoBtn.textContent = `自动(${targetSize.toFixed(1)})`;
 
-    if (isImageBasisMode()) {
-        importState.width = importState.width * ratio;
-        importState.height = importState.height * ratio;
-        importState.relX = oldRelX * ratio;
-        importState.relY = oldRelY * ratio;
-    }
+    importState.width = importState.width * ratio;
+    importState.height = importState.height * ratio;
+    importState.relX = oldRelX * ratio;
+    importState.relY = oldRelY * ratio;
     importState.x = canvas.offsetLeft + importState.relX;
     importState.y = canvas.offsetTop + importState.relY;
     updateOverlayTransform();
@@ -1862,6 +1947,11 @@ async function setMaskPattern(nextMask) {
     if (nextMask !== -1) lastManualMask = nextMask;
     maskPattern = nextMask;
     if (hasImageUpload && importState.active) {
+        if (shouldDirectAnimatedRecompute()) {
+            await restartDynamicPreviewWithRecompute();
+            updateMaskControls();
+            return;
+        }
         await updateQR({ skipArtisticPass: true });
         await applyImport(false, previewImg, true);
     } else {
@@ -2057,15 +2147,19 @@ function renderStyleGallery() {
 
         if (target === 'module') {
             drawModulePreviewPattern(pCtx, style, '#111111');
-        } else if (target === 'finder') {
+        } else if (target === 'finder' || target === 'align') {
             drawFinderPreviewPattern(pCtx, style, '#111111');
         }
     });
 }
 
 function syncStyleButtonState(target) {
-    const buttons = target === 'module' ? moduleStyleButtons : finderStyleButtons;
-    const value = target === 'module' ? moduleStyle : finderStyle;
+    const buttons = target === 'module'
+        ? moduleStyleButtons
+        : (target === 'finder' ? finderStyleButtons : alignStyleButtons);
+    const value = target === 'module'
+        ? moduleStyle
+        : (target === 'finder' ? finderStyle : alignStyle);
     if (!buttons) return;
     buttons.forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.style === value);
@@ -2103,6 +2197,7 @@ function getMaskModeLabel() {
 function updateOptionSummaries() {
     if (moduleStyleSummary) moduleStyleSummary.textContent = `${getModuleStyleLabel(moduleStyle)}`;
     if (finderStyleSummary) finderStyleSummary.textContent = `${getFinderStyleLabel(finderStyle)}`;
+    if (alignStyleSummary) alignStyleSummary.textContent = `${getFinderStyleLabel(alignStyle)}`;
     if (maskModeSummary) maskModeSummary.textContent = `${getMaskModeLabel()}`;
 }
 
@@ -2124,6 +2219,17 @@ function setupStyleGalleryButtons() {
                 finderStyle = btn.dataset.style || 'classic';
                 if (finderStyleSelect) finderStyleSelect.value = finderStyle;
                 syncStyleButtonState('finder');
+                updateOptionSummaries();
+                renderQR(false);
+            });
+        });
+    }
+    if (alignStyleButtons) {
+        alignStyleButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                alignStyle = btn.dataset.style || 'classic';
+                if (alignmentStyleSelect) alignmentStyleSelect.value = alignStyle;
+                syncStyleButtonState('align');
                 updateOptionSummaries();
                 renderQR(false);
             });
@@ -2269,6 +2375,8 @@ function showComputeOverlay(titleText, subtitleText) {
     if (computeSubtitle) computeSubtitle.textContent = subtitleText || '正在处理';
     if (computeProgressBar) computeProgressBar.style.width = '0%';
     if (computeProgressText) computeProgressText.textContent = '0% (0/1) · 预计剩余 --:--';
+    if (computeFrameProgressBar) computeFrameProgressBar.style.width = '0%';
+    if (computeFrameProgressText) computeFrameProgressText.textContent = '0% (0/1)';
 }
 
 function setComputeProgress(done, total) {
@@ -2299,6 +2407,15 @@ function setComputeProgress(done, total) {
     }
 
     computeProgressText.textContent = `${pct}% (${formatProgressCount(d)}/${formatProgressCount(t)}) · 预计剩余 ${etaText}`;
+}
+
+function setFrameComputeProgress(done, total) {
+    if (!computeOverlay || !computeFrameProgressBar || !computeFrameProgressText) return;
+    const t = Math.max(1, total || 1);
+    const d = Math.max(0, Math.min(t, done || 0));
+    const pct = Math.round((d / t) * 100);
+    computeFrameProgressBar.style.width = `${pct}%`;
+    computeFrameProgressText.textContent = `${pct}% (${formatProgressCount(d)}/${formatProgressCount(t)})`;
 }
 
 function hideComputeOverlay() {
@@ -3330,7 +3447,12 @@ async function updateQR(options = {}) {
         try {
             const result = await optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator, usePadFreedomMode, {
                 onProgress: (done, total) => {
-                    if (!suppressComputeOverlay) setComputeProgress(done, total);
+                    if (suppressComputeOverlay) {
+                        setFrameComputeProgress(done, total);
+                    } else {
+                        setComputeProgress(done, total);
+                        setFrameComputeProgress(done, total);
+                    }
                 },
                 isCanceled: () => computeCancelRequested || runId !== qrComputeRunId
             });
@@ -3338,7 +3460,10 @@ async function updateQR(options = {}) {
                 if (!suppressComputeOverlay) hideComputeOverlay();
                 return;
             }
-            if (!suppressComputeOverlay) setComputeProgress(100, 100);
+            if (!suppressComputeOverlay) {
+                setComputeProgress(100, 100);
+                setFrameComputeProgress(100, 100);
+            }
         } finally {
             if (!suppressComputeOverlay) hideComputeOverlay();
         }
@@ -3597,7 +3722,7 @@ function renderQR(isExport, imageOverride) {
             const y = qrOriginY + (r + qrMargin) * moduleH;
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
-            const activeStyle = (isFinder || isAlign) ? finderStyle : moduleStyle;
+            const activeStyle = isFinder ? finderStyle : (isAlign ? alignStyle : moduleStyle);
 
             if (drawnPixels.has(`${r},${c}`)) {
                 const val = drawnPixels.get(`${r},${c}`);
@@ -3606,7 +3731,8 @@ function renderQR(isExport, imageOverride) {
             }
 
             if (cell && cell.type === 'func' && (isFinder || isAlign)) {
-                const override = getFinderAlignOverride(finderStyle, r, c, count);
+                const eyeStyle = isFinder ? finderStyle : alignStyle;
+                const override = getFinderAlignOverride(eyeStyle, r, c, count);
                 if (override !== null) isDark = override;
             }
 
@@ -3625,7 +3751,7 @@ function renderQR(isExport, imageOverride) {
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
             const deferCircleFinder = (
-                finderStyle === 'circle' &&
+                activeStyle === 'circle' &&
                 cell &&
                 cell.type === 'func' &&
                 (isFinder || isAlign)
@@ -3647,7 +3773,7 @@ function renderQR(isExport, imageOverride) {
                 continue;
             }
 
-            if (isFinderAlignTransparentCell(finderStyle, r, c, count)) {
+            if (cell && cell.type === 'func' && (isFinder || isAlign) && isFinderAlignTransparentCell(activeStyle, r, c, count)) {
                 continue;
             }
 
@@ -3760,8 +3886,19 @@ function renderQR(isExport, imageOverride) {
         }
     }
 
-    if (finderStyle === 'circle') {
-        drawCircleFinderStyle(ctx, count, qrOriginX, qrOriginY, moduleW, moduleH, fgColor, bgColor);
+    if (finderStyle === 'circle' || alignStyle === 'circle') {
+        drawCircleFinderStyle(
+            ctx,
+            count,
+            qrOriginX,
+            qrOriginY,
+            moduleW,
+            moduleH,
+            fgColor,
+            bgColor,
+            finderStyle === 'circle',
+            alignStyle === 'circle'
+        );
     }
 }
 
@@ -3801,13 +3938,16 @@ function getMapCoord(e) {
 
 function drawAt(e) {
     const { r, c } = getMapCoord(e);
+    let changed = false;
     
     if (lastDrawPos) {
-        plotLine(lastDrawPos.r, lastDrawPos.c, r, c, currentDragTarget);
+        changed = plotLine(lastDrawPos.r, lastDrawPos.c, r, c, currentDragTarget);
     }
     lastDrawPos = { r, c };
-    
-    updateQR();
+
+    if (changed) {
+        updateQR({ skipArtisticPass: true });
+    }
 }
 
 function plotLine(r0, c0, r1, c1, color) {
@@ -3816,20 +3956,22 @@ function plotLine(r0, c0, r1, c1, color) {
     let sx = (c0 < c1) ? 1 : -1;
     let sy = (r0 < r1) ? 1 : -1;
     let err = dx - dy;
+    let changed = false;
     
     while(true) {
-        modifyPixel(r0, c0, color);
+        changed = modifyPixel(r0, c0, color) || changed;
         if (r0 === r1 && c0 === c1) break;
         let e2 = 2 * err;
         if (e2 > -dy) { err -= dy; c0 += sx; }
         if (e2 < dx) { err += dx; r0 += sy; }
     }
+    return changed;
 }
 
 function modifyPixel(r, c, targetColor) {
-    if (!pixelMap || r<0 || c<0 || r>=pixelMap.length || c>=pixelMap.length) return;
+    if (!pixelMap || r<0 || c<0 || r>=pixelMap.length || c>=pixelMap.length) return false;
     const cell = pixelMap[r][c];
-    if (!isEditableDataCell(cell)) return;
+    if (!isEditableDataCell(cell)) return false;
 
     const maskBit = (maskPattern === -2) ? 0 : cell.maskVal;
     // targetColor (1=Black, 0=White)
@@ -3844,10 +3986,14 @@ function modifyPixel(r, c, targetColor) {
     const bIdx = Math.floor(globalPos / 8);
     const bitPos = 7 - (globalPos % 8);
     
-    if (bIdx >= currentSuffixBytes.length) return;
+    if (bIdx >= currentSuffixBytes.length) return false;
+
+    const before = (currentSuffixBytes[bIdx] >> bitPos) & 1;
+    if (before === reqBit) return false;
 
     if (reqBit) currentSuffixBytes[bIdx] |= (1<<bitPos);
     else currentSuffixBytes[bIdx] &= ~(1<<bitPos);
+    return true;
 }
 
 // --- History & Zoom ---
@@ -4897,9 +5043,14 @@ async function applyImport(doSave = true, imageSource = previewImg, forceRecalc 
     }
 
     if (changed || forceRecalc) {
-        await updateQR();
-        if (!hasExternalImageSource) {
+        const directAnimatedRecompute = !hasExternalImageSource && shouldDirectAnimatedRecompute();
+        if (directAnimatedRecompute) {
             await restartDynamicPreviewWithRecompute();
+        } else {
+            await updateQR();
+            if (!hasExternalImageSource) {
+                await restartDynamicPreviewWithRecompute();
+            }
         }
         if (doSave) saveHistory();
     }
