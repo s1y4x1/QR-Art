@@ -2413,7 +2413,10 @@ function setComputeProgress(done, total) {
         }
     }
 
-    computeProgressText.textContent = `${pct}% (${formatProgressCount(d)}/${formatProgressCount(t)}) · 预计剩余 ${etaText}`;
+    const frameMode = !!(computeFrameProgressGroup && computeFrameProgressGroup.style.display !== 'none');
+    const shownDone = frameMode ? Math.min(t, Math.floor(d)) : d;
+    const shownTotal = frameMode ? Math.floor(t) : t;
+    computeProgressText.textContent = `${pct}% (${formatProgressCount(shownDone)}/${formatProgressCount(shownTotal)}) · 预计剩余 ${etaText}`;
 }
 
 function setFrameComputeProgress(done, total) {
@@ -3832,9 +3835,10 @@ function renderQR(isExport, imageOverride) {
                         isDark ? fgColor : bgColor
                     );
                 } else {
+                    const preferDark = lum < (BINARIZE_THRESHOLD / 255.0);
                     let alpha = 0.3;
                     let shouldDraw = false;
-                    if (isDark) {
+                    if (preferDark) {
                         if (lum >= 0.25) {
                             shouldDraw = true;
                             alpha = Math.max(0, Math.min(1, 1 - (0.25 / lum)));
