@@ -184,6 +184,35 @@ function seekVideo(video, timeSec) {
     });
 }
 
+function waitNextVideoFrame(video, timeoutMs = 1200) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+        };
+
+        const timer = setTimeout(() => {
+            done();
+        }, Math.max(100, timeoutMs));
+
+        if (video && typeof video.requestVideoFrameCallback === 'function') {
+            video.requestVideoFrameCallback(() => {
+                clearTimeout(timer);
+                done();
+            });
+            return;
+        }
+
+        const raf = requestAnimationFrame(() => {
+            clearTimeout(timer);
+            cancelAnimationFrame(raf);
+            done();
+        });
+    });
+}
+
 async function extractVideoFirstFrame(video) {
     const width = video.videoWidth || 0;
     const height = video.videoHeight || 0;
@@ -355,6 +384,7 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
     const duration = Math.max(0.01, video.duration || uploadInfo.videoDuration || 0.01);
     const totalFrames = Math.max(1, Math.floor(duration * fps));
     const delay = Math.max(10, Math.round(1000 / fps));
+    const shouldShowProgress = totalFrames > 20;
 
     const frameCanvas = document.createElement('canvas');
     frameCanvas.width = width;
@@ -364,18 +394,33 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
     const frames = [];
     const originalBytes = [...currentSuffixBytes];
     computeCancelRequested = false;
-    showComputeOverlay('计算中...', reason);
-    setComputeProgress(0, totalFrames);
-    setFrameComputeProgress(0, 1);
+    if (shouldShowProgress) {
+        showComputeOverlay('计算中...', reason);
+        setComputeProgress(0, totalFrames);
+        setFrameComputeProgress(0, 1);
+    }
 
     try {
+        try {
+            video.currentTime = 0;
+            await video.play();
+        } catch (_) {}
+
         for (let i = 0; i < totalFrames; i++) {
             if (computeCancelRequested) return null;
-            if (computeSubtitle) computeSubtitle.textContent = `${reason}（${i + 1}/${totalFrames}）`;
-            setFrameComputeProgress(0, 1);
+            if (shouldShowProgress) {
+                if (computeSubtitle) computeSubtitle.textContent = `${reason}（${i + 1}/${totalFrames}）`;
+                setFrameComputeProgress(0, 1);
+            }
 
-            const t = Math.min(duration - 0.001, i / fps);
-            await seekVideo(video, t);
+            if (video.ended) {
+                await seekVideo(video, Math.min(duration - 0.001, i / fps));
+            } else {
+                await waitNextVideoFrame(video, Math.max(300, delay * 2));
+                if (Math.abs(video.currentTime) < 0.0001 && i > 0) {
+                    await seekVideo(video, Math.min(duration - 0.001, i / fps));
+                }
+            }
             fctx.clearRect(0, 0, width, height);
             fctx.drawImage(video, 0, 0, width, height);
 
@@ -386,16 +431,19 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧') {
                 artisticStats: lastArtisticSolveStats ? { ...lastArtisticSolveStats } : null
             });
 
-            setFrameComputeProgress(1, 1);
-            setComputeProgress(i + 1, totalFrames);
+            if (shouldShowProgress) {
+                setFrameComputeProgress(1, 1);
+                setComputeProgress(i + 1, totalFrames);
+            }
         }
 
         animatedArtCache = { key: cacheKey, frames };
         return animatedArtCache;
     } finally {
+        try { video.pause(); } catch (_) {}
         currentSuffixBytes = [...originalBytes];
         renderQR(false);
-        hideComputeOverlay();
+        if (shouldShowProgress) hideComputeOverlay();
     }
 }
 
