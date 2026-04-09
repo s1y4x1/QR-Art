@@ -201,8 +201,191 @@ function setStaticGifPreview() {
     previewImg.src = gifPreviewCanvas.toDataURL('image/png');
 }
 
-function startGifPreview() {
+function getAnimatedArtCacheKey() {
+    const precise = (value) => Number(Number(value || 0).toFixed(4));
+    return JSON.stringify({
+        version,
+        eccLevel,
+        maskPattern,
+        userText,
+        encodingMode,
+        appendHash,
+        cell: CELL_SIZE,
+        fg: foregroundColor,
+        bg: backgroundColor,
+        art: !!(artisticModeCb && artisticModeCb.checked),
+        covered: !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked),
+        basis: isImageBasisMode(),
+        importActive: !!importState.active,
+        importW: precise(importState.width),
+        importH: precise(importState.height),
+        importX: precise(importState.relX),
+        importY: precise(importState.relY),
+        frames: uploadInfo && uploadInfo.gifFrames ? uploadInfo.gifFrames.length : 0
+    });
+}
+
+function invalidateAnimatedArtCache() {
+    animatedArtCache = null;
+}
+
+async function restartDynamicPreviewWithRecompute() {
+    if (!dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+    if (!uploadInfo || !uploadInfo.isAnimated || !uploadInfo.gifFrames || !uploadInfo.gifFrames.length) return;
+    const nonce = ++dynamicPreviewRestartNonce;
+    stopGifPreview();
+    invalidateAnimatedArtCache();
+    await startGifPreview();
+    if (nonce !== dynamicPreviewRestartNonce) return;
+}
+
+function snapshotQrDarkMatrix(qr) {
+    if (!qr || typeof qr.getModuleCount !== 'function' || typeof qr.isDark !== 'function') {
+        return null;
+    }
+    const count = qr.getModuleCount();
+    const matrix = new Array(count);
+    for (let r = 0; r < count; r++) {
+        const row = new Array(count);
+        for (let c = 0; c < count; c++) {
+            row[c] = !!qr.isDark(r, c);
+        }
+        matrix[r] = row;
+    }
+    return { count, matrix };
+}
+
+function createQrFromSnapshot(snapshot) {
+    if (!snapshot || !snapshot.matrix || !snapshot.count) return null;
+    return {
+        getModuleCount: () => snapshot.count,
+        isDark: (r, c) => !!(snapshot.matrix[r] && snapshot.matrix[r][c])
+    };
+}
+
+async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
+    if (!uploadInfo || !uploadInfo.isAnimated || !uploadInfo.gifFrames || !uploadInfo.gifFrames.length) return null;
+
+    const cacheKey = getAnimatedArtCacheKey();
+    if (animatedArtCache && animatedArtCache.key === cacheKey && animatedArtCache.frames && animatedArtCache.frames.length === uploadInfo.gifFrames.length) {
+        return animatedArtCache;
+    }
+    const totalFrames = uploadInfo.gifFrames.length;
+
+    const frameCanvas = document.createElement('canvas');
+    frameCanvas.width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
+    frameCanvas.height = uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
+    const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+    const frameRenderer = createGifFrameRenderer(fctx, frameCanvas);
+    frameRenderer.reset();
+
+    const originalBytes = [...currentSuffixBytes];
+    const originalQrSnapshot = snapshotQrDarkMatrix(generatedQR);
+    const frames = [];
+    computeCancelRequested = false;
+    showComputeOverlay('计算中...', reason);
+    setComputeProgress(0, totalFrames);
+
+    suppressComputeOverlay = true;
+    try {
+        for (let idx = 0; idx < totalFrames; idx++) {
+            if (computeCancelRequested) return null;
+            if (computeSubtitle) computeSubtitle.textContent = `${reason}（${idx + 1}/${totalFrames}）`;
+
+            const frame = uploadInfo.gifFrames[idx];
+            const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[idx];
+            if (fullFrame) {
+                drawFullFrameToCanvas(fullFrame, fctx, frameCanvas);
+            } else {
+                frameRenderer.draw(frame);
+            }
+
+            currentSuffixBytes = [...originalBytes];
+            if (lastWhitenMode === 'white') {
+                setSuffixUniform(0);
+            } else if (lastWhitenMode === 'black') {
+                setSuffixUniform(1);
+            }
+
+            optimizationImageSourceOverride = frameCanvas;
+            await applyImport(false, frameCanvas, true);
+            if (computeCancelRequested) return null;
+
+            frames.push({
+                suffixBytes: [...currentSuffixBytes],
+                qrSnapshot: snapshotQrDarkMatrix(generatedQR),
+                delay: fullFrame ? Math.max(10, fullFrame.delay || 10) : getGifFrameDelayMs(frame)
+            });
+            setComputeProgress(idx + 1, totalFrames);
+        }
+
+        animatedArtCache = { key: cacheKey, frames };
+        return animatedArtCache;
+    } finally {
+        optimizationImageSourceOverride = null;
+        suppressComputeOverlay = false;
+        currentSuffixBytes = [...originalBytes];
+        const restoredQr = createQrFromSnapshot(originalQrSnapshot);
+        if (restoredQr) {
+            generatedQR = restoredQr;
+        }
+        renderQR(false);
+        hideComputeOverlay();
+    }
+}
+
+function startCachedGifPreview(cache) {
+    if (!cache || !cache.frames || !cache.frames.length) return;
+    const width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
+    const height = uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
+    ensureGifPreviewCanvas(width, height);
+    const renderer = createGifFrameRenderer(gifPreviewCtx, gifPreviewCanvas);
+    renderer.reset();
+    gifPreviewIndex = 0;
+    gifPreviewRunning = true;
+
+    const tick = () => {
+        if (!gifPreviewRunning) return;
+        const frame = uploadInfo.gifFrames[gifPreviewIndex];
+        const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[gifPreviewIndex];
+        if (fullFrame) {
+            drawFullFrameToCanvas(fullFrame, gifPreviewCtx, gifPreviewCanvas);
+        } else {
+            renderer.draw(frame);
+        }
+
+        const item = cache.frames[gifPreviewIndex];
+        const prevQr = generatedQR;
+        const prevBytes = currentSuffixBytes;
+        const frameQr = createQrFromSnapshot(item.qrSnapshot);
+        if (frameQr) {
+            generatedQR = frameQr;
+        }
+        currentSuffixBytes = item.suffixBytes ? [...item.suffixBytes] : prevBytes;
+        renderQR(false, gifPreviewCanvas);
+        generatedQR = prevQr;
+        currentSuffixBytes = prevBytes;
+
+        if (previewImg) previewImg.src = gifPreviewCanvas.toDataURL('image/png');
+        gifPreviewIndex = (gifPreviewIndex + 1) % cache.frames.length;
+        gifPreviewTimer = setTimeout(tick, item.delay || 80);
+    };
+    tick();
+}
+
+async function startGifPreview() {
     if (!uploadInfo || !uploadInfo.isAnimated || !uploadInfo.gifFrames || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
+
+    if (artisticModeCb && artisticModeCb.checked) {
+        const cache = await processAnimatedFramesForArt('正在逐帧计算动态预览');
+        if (!cache) {
+            dynamicPreviewCb.checked = false;
+            return;
+        }
+        startCachedGifPreview(cache);
+        return;
+    }
+
     const width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
     const height = uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
     ensureGifPreviewCanvas(width, height);
@@ -362,7 +545,14 @@ let basisImageHeight = 0;
 let lastArtisticSolveStats = null;
 let computeCancelRequested = false;
 let qrComputeRunId = 0;
+let optimizationImageSourceOverride = null;
+let animatedArtCache = null;
+let suppressComputeOverlay = false;
 let padFreedomModeActive = false;
+let dynamicPreviewRestartNonce = 0;
+let computeProgressStartMs = 0;
+let computeProgressLastDone = 0;
+let computeProgressLastTotal = 1;
 
 function isImageBasisMode() {
     return !!(imageBasisCb && !imageBasisCb.disabled && imageBasisCb.checked && hasImageUpload);
@@ -943,7 +1133,7 @@ function init() {
     if (imageBasisCb) {
         imageBasisCb.disabled = true;
         imageBasisCb.checked = false;
-        imageBasisCb.addEventListener('change', () => {
+        imageBasisCb.addEventListener('change', async () => {
             if (!hasImageUpload) {
                 imageBasisCb.checked = false;
                 return;
@@ -992,7 +1182,7 @@ function init() {
 
                 renderQR(false);
                 updateOverlayTransform();
-                applyImport(false);
+                await applyImport(false, previewImg, true);
                 syncImageSizeInputs();
             } else {
                 renderQR(false);
@@ -1023,7 +1213,7 @@ function init() {
     }
 
     if (imageSizeWInput) {
-        imageSizeWInput.addEventListener('change', () => {
+        imageSizeWInput.addEventListener('change', async () => {
             if (!importState.active) return;
             let w = parseInt(imageSizeWInput.value, 10);
             if (isImageBasisMode()) {
@@ -1033,7 +1223,7 @@ function init() {
                 scaleBasisScene(scale);
                 updateOverlayTransform();
                 updateOutOfBoundsState();
-                applyImport(false);
+                await applyImport(false, previewImg, true);
                 syncCellSizeFromBasisBox();
                 syncImageSizeInputs();
                 return;
@@ -1045,13 +1235,13 @@ function init() {
             importState.x = canvas.offsetLeft + importState.relX;
             updateOverlayTransform();
             updateOutOfBoundsState();
-            applyImport(false);
+            await applyImport(false, previewImg, true);
             syncImageSizeInputs();
         });
     }
 
     if (imageSizeHInput) {
-        imageSizeHInput.addEventListener('change', () => {
+        imageSizeHInput.addEventListener('change', async () => {
             if (!importState.active) return;
             let h = parseInt(imageSizeHInput.value, 10);
             if (isImageBasisMode()) {
@@ -1061,7 +1251,7 @@ function init() {
                 scaleBasisScene(scale);
                 updateOverlayTransform();
                 updateOutOfBoundsState();
-                applyImport(false);
+                await applyImport(false, previewImg, true);
                 syncCellSizeFromBasisBox();
                 syncImageSizeInputs();
                 return;
@@ -1073,7 +1263,7 @@ function init() {
             importState.y = canvas.offsetTop + importState.relY;
             updateOverlayTransform();
             updateOutOfBoundsState();
-            applyImport(false);
+            await applyImport(false, previewImg, true);
             syncImageSizeInputs();
         });
     }
@@ -1103,7 +1293,7 @@ function init() {
     // Cell Size Input
     const cellSizeInput = document.getElementById('cell-size-input');
     if (cellSizeInput) {
-        cellSizeInput.addEventListener('change', (e) => {
+        cellSizeInput.addEventListener('change', async (e) => {
             let val = parseFloat(e.target.value);
             if (!Number.isFinite(val)) val = CELL_SIZE;
             if (val < 0.1) val = 0.1;
@@ -1125,7 +1315,10 @@ function init() {
             } else {
                 CELL_SIZE = val;
             }
-            renderQR(false); 
+            renderQR(false);
+            if (importState.active && hasImageUpload) {
+                await applyImport(false, previewImg, true);
+            }
         });
     }
 
@@ -1340,12 +1533,13 @@ function init() {
 
     const artCheck = document.getElementById('artistic-mode');
     if(artCheck) {
-        artCheck.addEventListener('change', () => {
+        artCheck.addEventListener('change', async () => {
              if (allowCoveredFreedomCb) {
                  allowCoveredFreedomCb.disabled = !artCheck.checked;
                  if (!artCheck.checked) allowCoveredFreedomCb.checked = false;
              }
-             updateQR();
+             await updateQR();
+             await restartDynamicPreviewWithRecompute();
         });
     }
 
@@ -1362,7 +1556,6 @@ function init() {
             computeCancelRequested = true;
             qrComputeRunId += 1;
             if (computeSubtitle) computeSubtitle.textContent = '正在取消...';
-            hideComputeOverlay();
         });
     }
 
@@ -1623,7 +1816,7 @@ function applyOriginalImageSize() {
     updateOutOfBoundsState();
 }
 
-function restoreImportOverlayToNaturalSize() {
+async function restoreImportOverlayToNaturalSize() {
     if (!importState.active || !previewImg) return;
     const imgW = previewImg.naturalWidth || previewImg.width || 0;
     const imgH = previewImg.naturalHeight || previewImg.height || 0;
@@ -1643,7 +1836,7 @@ function restoreImportOverlayToNaturalSize() {
 
         updateOverlayTransform();
         updateOutOfBoundsState();
-        applyImport(false);
+        await applyImport(false, previewImg, true);
         syncImageSizeInputs();
         return;
     }
@@ -1660,7 +1853,7 @@ function restoreImportOverlayToNaturalSize() {
 
     updateOverlayTransform();
     updateOutOfBoundsState();
-    applyImport(false);
+    await applyImport(false, previewImg, true);
     syncImageSizeInputs();
 }
 
@@ -1670,7 +1863,7 @@ async function setMaskPattern(nextMask) {
     maskPattern = nextMask;
     if (hasImageUpload && importState.active) {
         await updateQR({ skipArtisticPass: true });
-        applyImport(false, previewImg, true);
+        await applyImport(false, previewImg, true);
     } else {
         await updateQR();
     }
@@ -2031,7 +2224,7 @@ function updateEncodingWarning(message) {
 async function refitImageAfterQrUpdate(forceRecalc = false) {
     if (hasImageUpload && importState.active) {
         await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-        applyImport(false, previewImg, forceRecalc);
+        await applyImport(false, previewImg, forceRecalc);
     }
 }
 
@@ -2049,23 +2242,63 @@ function updateArtisticWarning(stats) {
     artisticWarning.textContent = `纠错区仅尽力拟合（未匹配 ${stats.remainingMismatch}/${stats.totalTargets}${extra}）`;
 }
 
+function formatDurationHMS(totalSeconds) {
+    const sec = Math.max(0, Math.round(totalSeconds || 0));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) {
+        return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function formatProgressCount(value) {
+    if (Number.isInteger(value)) return `${value}`;
+    return `${Math.round(value * 10) / 10}`;
+}
+
 function showComputeOverlay(titleText, subtitleText) {
     if (!computeOverlay) return;
     computeCancelRequested = false;
+    computeProgressStartMs = performance.now();
+    computeProgressLastDone = 0;
+    computeProgressLastTotal = 1;
     computeOverlay.style.display = 'flex';
     if (computeTitle) computeTitle.textContent = titleText || '计算中...';
     if (computeSubtitle) computeSubtitle.textContent = subtitleText || '正在处理';
     if (computeProgressBar) computeProgressBar.style.width = '0%';
-    if (computeProgressText) computeProgressText.textContent = '0%';
+    if (computeProgressText) computeProgressText.textContent = '0% (0/1) · 预计剩余 --:--';
 }
 
 function setComputeProgress(done, total) {
     if (!computeOverlay || !computeProgressBar || !computeProgressText) return;
     const t = Math.max(1, total || 1);
     const d = Math.max(0, Math.min(t, done || 0));
+    if (!computeProgressStartMs || d < computeProgressLastDone || t !== computeProgressLastTotal) {
+        computeProgressStartMs = performance.now();
+    }
+    computeProgressLastDone = d;
+    computeProgressLastTotal = t;
+
     const pct = Math.round((d / t) * 100);
     computeProgressBar.style.width = `${pct}%`;
-    computeProgressText.textContent = `${pct}% (${d}/${t})`;
+
+    let etaText = '--:--';
+    if (d >= t) {
+        etaText = '00:00';
+    } else if (d > 0) {
+        const elapsedSec = (performance.now() - computeProgressStartMs) / 1000;
+        if (elapsedSec > 0.05) {
+            const speed = d / elapsedSec;
+            if (speed > 0) {
+                const remainSec = (t - d) / speed;
+                etaText = formatDurationHMS(remainSec);
+            }
+        }
+    }
+
+    computeProgressText.textContent = `${pct}% (${formatProgressCount(d)}/${formatProgressCount(t)}) · 预计剩余 ${etaText}`;
 }
 
 function hideComputeOverlay() {
@@ -2143,11 +2376,12 @@ function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr, padBytes 
 async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator, usePadFreedomMode = false, options = {}) {
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     const isCanceled = typeof options.isCanceled === 'function' ? options.isCanceled : (() => false);
-    if (!pixelMap || !generatedQR || !previewImg || !importState.active) {
+    const sourceImage = optimizationImageSourceOverride || previewImg;
+    if (!pixelMap || !generatedQR || !sourceImage || !importState.active) {
         lastArtisticSolveStats = null;
         return { canceled: false };
     }
-    const src = getSourceDimensions(previewImg);
+    const src = getSourceDimensions(sourceImage);
     if (src.width <= 0 || src.height <= 0) {
         lastArtisticSolveStats = null;
         return { canceled: false };
@@ -2195,7 +2429,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
     tmpCanvas.width = src.width;
     tmpCanvas.height = src.height;
     const tCtx = tmpCanvas.getContext('2d', { willReadFrequently: true });
-    tCtx.drawImage(previewImg, 0, 0, src.width, src.height);
+    tCtx.drawImage(sourceImage, 0, 0, src.width, src.height);
     const imgData = tCtx.getImageData(0, 0, src.width, src.height).data;
 
     const targetAt = (r, c) => {
@@ -2803,7 +3037,7 @@ async function updateQR(options = {}) {
     const skipArtisticPass = !!options.skipArtisticPass;
     const encodingError = getEncodingValidationError(encodingMode, userText || '');
     const artisticModeOn = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
-    const shouldShowCompute = artisticModeOn && hasImageUpload && importState.active && !skipArtisticPass;
+    const shouldShowCompute = artisticModeOn && hasImageUpload && importState.active && !skipArtisticPass && !suppressComputeOverlay;
     const usePadFreedomMode = true;
     padFreedomModeActive = usePadFreedomMode;
     if (shouldShowCompute) {
@@ -2814,7 +3048,7 @@ async function updateQR(options = {}) {
     if (encodingError) {
         updateTextOverflowWarning(null);
         updateArtisticWarning(null);
-        hideComputeOverlay();
+        if (!suppressComputeOverlay) hideComputeOverlay();
         return;
     }
 
@@ -2919,7 +3153,7 @@ async function updateQR(options = {}) {
 
     if (!fitsAtV40) {
         updateArtisticWarning(null);
-        hideComputeOverlay();
+        if (!suppressComputeOverlay) hideComputeOverlay();
         return;
     }
 
@@ -3092,23 +3326,25 @@ async function updateQR(options = {}) {
 
     if (!skipArtisticPass && artisticModeOn && hasImageUpload && importState.active) {
         const evalMask = (maskForMake === -1) ? 0 : maskForMake;
-        if (computeSubtitle) computeSubtitle.textContent = '正在拟合纠错码区';
+        if (!suppressComputeOverlay && computeSubtitle) computeSubtitle.textContent = '正在拟合纠错码区';
         try {
             const result = await optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator, usePadFreedomMode, {
-                onProgress: (done, total) => setComputeProgress(done, total),
+                onProgress: (done, total) => {
+                    if (!suppressComputeOverlay) setComputeProgress(done, total);
+                },
                 isCanceled: () => computeCancelRequested || runId !== qrComputeRunId
             });
             if (result && result.canceled) {
-                hideComputeOverlay();
+                if (!suppressComputeOverlay) hideComputeOverlay();
                 return;
             }
-            setComputeProgress(100, 100);
+            if (!suppressComputeOverlay) setComputeProgress(100, 100);
         } finally {
-            hideComputeOverlay();
+            if (!suppressComputeOverlay) hideComputeOverlay();
         }
     } else {
         lastArtisticSolveStats = null;
-        hideComputeOverlay();
+        if (!suppressComputeOverlay) hideComputeOverlay();
     }
     updateArtisticWarning(lastArtisticSolveStats);
     
@@ -3295,6 +3531,46 @@ function renderQR(isExport, imageOverride) {
     const moduleW = qrW / (count + 2 * qrMargin);
     const moduleH = qrH / (count + 2 * qrMargin);
 
+    const sampleModuleCoverage = (x, y, w, h) => {
+        if (!offData || w <= 0 || h <= 0) {
+            return { coverage: 0, lum: 0.5, transparent: true };
+        }
+        const x0 = Math.max(0, Math.floor(x));
+        const y0 = Math.max(0, Math.floor(y));
+        const x1 = Math.min(canvas.width - 1, Math.ceil(x + w) - 1);
+        const y1 = Math.min(canvas.height - 1, Math.ceil(y + h) - 1);
+        if (x1 < x0 || y1 < y0) {
+            return { coverage: 0, lum: 0.5, transparent: true };
+        }
+
+        const sampleCols = 4;
+        const sampleRows = 4;
+        let total = 0;
+        let opaque = 0;
+        let lumSum = 0;
+
+        for (let sy = 0; sy < sampleRows; sy++) {
+            const py = Math.min(y1, Math.max(y0, Math.round(y0 + ((sy + 0.5) * (y1 - y0 + 1) / sampleRows) - 0.5)));
+            for (let sx = 0; sx < sampleCols; sx++) {
+                const px = Math.min(x1, Math.max(x0, Math.round(x0 + ((sx + 0.5) * (x1 - x0 + 1) / sampleCols) - 0.5)));
+                const idx = (py * canvas.width + px) * 4;
+                total += 1;
+                const alpha = offData[idx + 3];
+                if (alpha > 10) {
+                    opaque += 1;
+                    const rr = offData[idx];
+                    const gg = offData[idx + 1];
+                    const bb = offData[idx + 2];
+                    lumSum += (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255.0;
+                }
+            }
+        }
+
+        const coverage = total > 0 ? (opaque / total) : 0;
+        const lum = opaque > 0 ? (lumSum / opaque) : 0.5;
+        return { coverage, lum, transparent: opaque === 0 };
+    };
+
     const isFormatInfo = (rr, cc) => {
         if (rr === count - 8 && cc === 8) return true;
         if (cc === 8 && rr < 9) return true;
@@ -3375,44 +3651,36 @@ function renderQR(isExport, imageOverride) {
                 continue;
             }
 
-            let covered = false;
-            if (!basisMode && hasImage && embedImage) {
-                if (offData) {
-                    const cx = Math.floor(x + moduleW / 2);
-                    const cy = Math.floor(y + moduleH / 2);
-                    if (cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
-                        const idx = (cy * canvas.width + cx) * 4;
-                        covered = offData[idx + 3] > 10;
-                    }
-                }
+            let coverRatio = 0;
+            let sampledLum = 0.5;
+            let moduleTransparent = true;
+            if (hasImage && offData) {
+                const sampled = sampleModuleCoverage(x, y, moduleW, moduleH);
+                coverRatio = sampled.coverage;
+                sampledLum = sampled.lum;
+                moduleTransparent = sampled.transparent;
             }
 
-            const useGhost = ((basisMode && embedImage) || (!basisMode && covered)) && cell && (cell.type === 'data' || cell.type === 'ec');
+            const covered = coverRatio >= 0.12;
+            const basisGhost = basisMode && (embedImage || artisticMode);
+            const nonBasisGhost = !basisMode && (embedImage || artisticMode) && covered;
+            const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
             if (useGhost) {
                 const smallSize = Math.min(moduleW, moduleH) / 2;
                 const offsetX = (moduleW - smallSize) / 2;
                 const offsetY = (moduleH - smallSize) / 2;
                 const cx = Math.floor(x + moduleW / 2);
                 const cy = Math.floor(y + moduleH / 2);
-                let lum = 0.5;
-                let isTransparent = false;
+                let lum = sampledLum;
+                let isTransparent = moduleTransparent;
 
-                if (offData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
-                    const idx = (cy * canvas.width + cx) * 4;
-                    if (offData[idx + 3] <= 10) {
-                        isTransparent = true;
-                    } else {
-                        const rr = offData[idx];
-                        const gg = offData[idx + 1];
-                        const bb = offData[idx + 2];
-                        lum = (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255.0;
-                    }
-                } else if (bgData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
+                if (isTransparent && bgData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                     const idx = (cy * canvas.width + cx) * 4;
                     const rr = bgData.data[idx];
                     const gg = bgData.data[idx + 1];
                     const bb = bgData.data[idx + 2];
                     lum = (0.299 * rr + 0.587 * gg + 0.114 * bb) / 255.0;
+                    isTransparent = false;
                 }
 
                 if (isTransparent) {
@@ -3967,6 +4235,52 @@ async function exportGifBlob() {
         workerScript: getGifWorkerScriptUrl()
     });
 
+    const artisticOn = !!(artisticModeCb && artisticModeCb.checked);
+    if (artisticOn) {
+        const cache = await processAnimatedFramesForArt('正在逐帧计算导出内容');
+        if (!cache || !cache.frames || !cache.frames.length) {
+            throw new Error('导出已取消');
+        }
+
+        const frameCanvas = document.createElement('canvas');
+        frameCanvas.width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
+        frameCanvas.height = uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
+        const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+        const frameRenderer = createGifFrameRenderer(fctx, frameCanvas);
+        frameRenderer.reset();
+
+        for (let i = 0; i < cache.frames.length; i++) {
+            const item = cache.frames[i];
+            const frame = uploadInfo.gifFrames[i];
+            const fullFrame = uploadInfo.gifFullFrames && uploadInfo.gifFullFrames[i];
+            if (fullFrame) {
+                drawFullFrameToCanvas(fullFrame, fctx, frameCanvas);
+            } else {
+                frameRenderer.draw(frame);
+            }
+
+            const prevQr = generatedQR;
+            const prevBytes = currentSuffixBytes;
+            const frameQr = createQrFromSnapshot(item.qrSnapshot);
+            if (frameQr) {
+                generatedQR = frameQr;
+            }
+            currentSuffixBytes = item.suffixBytes ? [...item.suffixBytes] : prevBytes;
+            renderQR(true, frameCanvas);
+            generatedQR = prevQr;
+            currentSuffixBytes = prevBytes;
+
+            const delay = item.delay || (fullFrame ? Math.max(10, fullFrame.delay || 10) : getGifFrameDelayMs(frame));
+            gif.addFrame(canvas, { copy: true, delay });
+        }
+        renderQR(false);
+
+        return await new Promise((resolve) => {
+            gif.on('finished', (blob) => resolve(blob));
+            gif.render();
+        });
+    }
+
     const frameCanvas = document.createElement('canvas');
     frameCanvas.width = uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
     frameCanvas.height = uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
@@ -4011,6 +4325,7 @@ async function handleImageUpload(e) {
     if (!file) return;
 
     stopGifPreview();
+    animatedArtCache = null;
 
     const guessed = guessMimeFromName(file.name);
     uploadInfo = {
@@ -4234,6 +4549,7 @@ function clearImportedImage() {
     previewImg.removeAttribute('src');
     fileInput.value = '';
     uploadInfo = { mime: null, name: null, isGif: false, isAnimated: false, animatedType: null, gifFrames: null, gifFullFrames: null, gifWidth: 0, gifHeight: 0, gifBuffer: null };
+    animatedArtCache = null;
     hasImageUpload = false;
     refreshImageSizeControlVisibility();
     stopGifPreview();
@@ -4488,7 +4804,7 @@ function getCanvasContentOffsets() {
     };
 }
 
-function applyImport(doSave = true, imageSource = previewImg, forceRecalc = false) {
+async function applyImport(doSave = true, imageSource = previewImg, forceRecalc = false) {
     const hasExternalImageSource = !!imageSource && imageSource !== previewImg;
     if (!importState.active && !hasExternalImageSource) return;
     const basisMode = isImageBasisMode();
@@ -4581,7 +4897,10 @@ function applyImport(doSave = true, imageSource = previewImg, forceRecalc = fals
     }
 
     if (changed || forceRecalc) {
-        updateQR();
+        await updateQR();
+        if (!hasExternalImageSource) {
+            await restartDynamicPreviewWithRecompute();
+        }
         if (doSave) saveHistory();
     }
     
