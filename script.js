@@ -306,7 +306,7 @@ async function processAnimatedFramesForArt(reason = '正在处理动图帧') {
     try {
         for (let idx = 0; idx < totalFrames; idx++) {
             if (computeCancelRequested) return null;
-            if (computeSubtitle) computeSubtitle.textContent = `${reason}（${idx + 1}/${totalFrames}）`;
+            if (computeSubtitle) computeSubtitle.textContent = reason;
             setFrameComputeProgress(0, 1);
 
             const frame = uploadInfo.gifFrames[idx];
@@ -3684,8 +3684,8 @@ function renderQR(isExport, imageOverride) {
             return { coverage: 0, lum: 0.5, transparent: true };
         }
 
-        const sampleCols = 4;
-        const sampleRows = 4;
+        const sampleCols = 8;
+        const sampleRows = 8;
         let total = 0;
         let opaque = 0;
         let lumSum = 0;
@@ -3803,7 +3803,7 @@ function renderQR(isExport, imageOverride) {
                 moduleTransparent = sampled.transparent;
             }
 
-            const covered = coverRatio >= 0.12;
+            const covered = coverRatio > 0;
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
             const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
@@ -3835,10 +3835,9 @@ function renderQR(isExport, imageOverride) {
                         isDark ? fgColor : bgColor
                     );
                 } else {
-                    const preferDark = lum < (BINARIZE_THRESHOLD / 255.0);
                     let alpha = 0.3;
                     let shouldDraw = false;
-                    if (preferDark) {
+                    if (isDark) {
                         if (lum >= 0.25) {
                             shouldDraw = true;
                             alpha = Math.max(0, Math.min(1, 1 - (0.25 / lum)));
