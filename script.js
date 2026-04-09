@@ -670,6 +670,7 @@ let drawnPixels = new Map();
 let activeTool = 'pen'; 
 let isDragging = false;
 let currentDragTarget = null;
+let pendingDrawRecompute = false;
 let currentSuffixBytes = []; 
 let lastCapacity = 0;
 let generatedQR = null;
@@ -1894,12 +1895,22 @@ function init() {
     canvas.addEventListener('mouseup', () => {
         if (isDragging) {
             isDragging = false;
+            if (pendingDrawRecompute) {
+                const artOn = !!(artisticModeCb && artisticModeCb.checked);
+                updateQR({ skipArtisticPass: !artOn });
+                pendingDrawRecompute = false;
+            }
             saveHistory();
         }
     });
     canvas.addEventListener('mouseleave', () => {
         if (isDragging) {
             isDragging = false;
+            if (pendingDrawRecompute) {
+                const artOn = !!(artisticModeCb && artisticModeCb.checked);
+                updateQR({ skipArtisticPass: !artOn });
+                pendingDrawRecompute = false;
+            }
             saveHistory();
         }
     });
@@ -4193,8 +4204,7 @@ function drawAt(e) {
     lastDrawPos = { r, c };
 
     if (changed) {
-        const artOn = !!(artisticModeCb && artisticModeCb.checked);
-        updateQR({ skipArtisticPass: !artOn });
+        pendingDrawRecompute = true;
     }
 }
 
