@@ -391,11 +391,11 @@ function startRenderedFramePreview(cache, token = previewSessionToken) {
 
 async function processVideoFramesForPreview(reason = '正在处理视频帧', options = {}) {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoObjectUrl) return null;
-    const cacheKey = `${getAnimatedArtCacheKey()}::video-preview`;
     const forExport = !!options.forExport;
     const artisticOn = options.artisticOn !== undefined
         ? !!options.artisticOn
         : !!(artisticModeCb && artisticModeCb.checked);
+    const cacheKey = `${getAnimatedArtCacheKey()}::video-${forExport ? 'export' : 'preview'}::${artisticOn ? 'art' : 'plain'}`;
     if (animatedArtCache && animatedArtCache.key === cacheKey && animatedArtCache.frames && animatedArtCache.frames.length) {
         return animatedArtCache;
     }
@@ -475,10 +475,10 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
 
             if (artisticOn) {
                 animatedFrameProgressContext = { frameIndex: i, totalFrames };
-                await processSingleFrameCanvas(frameCanvas, false);
+                await processSingleFrameCanvas(frameCanvas, forExport);
                 animatedFrameProgressContext = null;
             } else {
-                renderQR(false, frameCanvas);
+                renderQR(forExport, frameCanvas);
             }
             if (computeCancelRequested) return null;
             frames.push({
@@ -4955,23 +4955,45 @@ async function exportVideoBlob() {
     computeCancelRequested = false;
     recorder.start(Math.max(100, Math.round(frameDelay * 2)));
 
+    const paintFrameByIndex = (index) => {
+        const idx = Math.max(0, Math.min(totalFrames - 1, index));
+        const item = cache.frames[idx];
+        octx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+        if (item && item.imageData) {
+            ctx.putImageData(item.imageData, 0, 0);
+        }
+        octx.drawImage(canvas, 0, 0, outputCanvas.width, outputCanvas.height);
+    };
+
     try {
+        const duration = Math.max(0.01, srcVideo.duration || uploadInfo.videoDuration || (totalFrames / fps));
+        let lastIndex = -1;
         try {
             srcVideo.currentTime = 0;
             await srcVideo.play();
         } catch (_) {}
-        for (let i = 0; i < totalFrames; i++) {
+
+        while (true) {
             if (computeCancelRequested) {
                 throw new Error('导出已取消');
             }
-            const item = cache.frames[i];
-            octx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-            if (item && item.imageData) {
-                ctx.putImageData(item.imageData, 0, 0);
+
+            const ct = Math.max(0, srcVideo.currentTime || 0);
+            const frameIndex = Math.min(totalFrames - 1, Math.max(0, Math.floor(ct * fps)));
+            if (frameIndex !== lastIndex) {
+                paintFrameByIndex(frameIndex);
+                lastIndex = frameIndex;
             }
-            octx.drawImage(canvas, 0, 0, outputCanvas.width, outputCanvas.height);
-            await new Promise((resolve) => setTimeout(resolve, item && item.delay ? item.delay : frameDelay));
+
+            if (srcVideo.ended || ct >= duration - (1 / Math.max(2, fps))) {
+                break;
+            }
+
+            await waitNextVideoFrame(srcVideo, Math.max(300, frameDelay * 2));
         }
+
+        paintFrameByIndex(totalFrames - 1);
+        await new Promise((resolve) => setTimeout(resolve, Math.max(100, frameDelay)));
     } finally {
         renderQR(false);
         try { srcVideo.pause(); } catch (_) {}
