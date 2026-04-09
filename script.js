@@ -291,50 +291,112 @@ function setStaticGifPreview() {
 
 async function startVideoPreview() {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoElement || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
-    const video = uploadInfo.videoElement;
-    const width = video.videoWidth || uploadInfo.gifWidth || previewImg.naturalWidth || previewImg.width;
-    const height = video.videoHeight || uploadInfo.gifHeight || previewImg.naturalHeight || previewImg.height;
-    if (width <= 0 || height <= 0) return;
-    ensureGifPreviewCanvas(width, height);
-    videoPreviewRunning = true;
-
-    try {
-        video.currentTime = 0;
-    } catch (_) {}
-    try {
-        await video.play();
-    } catch (err) {
-        console.warn('视频预览播放失败:', err);
+    const cache = await processVideoFramesForPreview('正在逐帧计算动态预览');
+    if (!cache || !cache.frames || !cache.frames.length) {
+        dynamicPreviewCb.checked = false;
         return;
     }
+    startRenderedFramePreview(cache);
+}
 
-    const tick = async () => {
-        if (!videoPreviewRunning || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
-        if (video.paused || video.ended) {
-            try {
-                video.currentTime = 0;
-                await video.play();
-            } catch (_) {}
-        }
-        gifPreviewCtx.clearRect(0, 0, width, height);
-        gifPreviewCtx.drawImage(video, 0, 0, width, height);
+function startRenderedFramePreview(cache) {
+    if (!cache || !cache.frames || !cache.frames.length) return;
+    gifPreviewIndex = 0;
+    gifPreviewRunning = true;
 
-        if (artisticModeCb && artisticModeCb.checked) {
-            const frameCanvas = document.createElement('canvas');
-            frameCanvas.width = width;
-            frameCanvas.height = height;
-            const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
-            fctx.drawImage(gifPreviewCanvas, 0, 0, width, height);
-            await processSingleFrameCanvas(frameCanvas, false);
-            renderQR(false, frameCanvas);
-            if (previewImg) previewImg.src = canvas.toDataURL('image/png');
-        } else {
-            renderQR(false, gifPreviewCanvas);
-            if (previewImg) previewImg.src = canvas.toDataURL('image/png');
+    const tick = () => {
+        if (!gifPreviewRunning) return;
+        const item = cache.frames[gifPreviewIndex];
+        if (item && item.imageData) {
+            ctx.putImageData(item.imageData, 0, 0);
+            updateArtisticWarning(item.artisticStats || null);
         }
-        videoPreviewRafId = requestAnimationFrame(() => { tick(); });
+        gifPreviewIndex = (gifPreviewIndex + 1) % cache.frames.length;
+        gifPreviewTimer = setTimeout(tick, item && item.delay ? item.delay : 33);
     };
-    videoPreviewRafId = requestAnimationFrame(() => { tick(); });
+    tick();
+}
+
+async function processVideoFramesForPreview(reason = '正在处理视频帧') {
+    if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoObjectUrl) return null;
+    const cacheKey = `${getAnimatedArtCacheKey()}::video-preview`;
+    if (animatedArtCache && animatedArtCache.key === cacheKey && animatedArtCache.frames && animatedArtCache.frames.length) {
+        return animatedArtCache;
+    }
+
+    const video = document.createElement('video');
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.src = uploadInfo.videoObjectUrl;
+    await new Promise((resolve, reject) => {
+        const onLoaded = () => {
+            cleanup();
+            resolve();
+        };
+        const onError = () => {
+            cleanup();
+            reject(new Error('视频加载失败'));
+        };
+        const cleanup = () => {
+            video.removeEventListener('loadedmetadata', onLoaded);
+            video.removeEventListener('error', onError);
+        };
+        video.addEventListener('loadedmetadata', onLoaded, { once: true });
+        video.addEventListener('error', onError, { once: true });
+    });
+
+    const width = video.videoWidth || uploadInfo.gifWidth || 0;
+    const height = video.videoHeight || uploadInfo.gifHeight || 0;
+    if (width <= 0 || height <= 0) return null;
+
+    const fps = Math.max(1, Math.min(60, Math.round(uploadInfo.videoFps || 30)));
+    const duration = Math.max(0.01, video.duration || uploadInfo.videoDuration || 0.01);
+    const totalFrames = Math.max(1, Math.floor(duration * fps));
+    const delay = Math.max(10, Math.round(1000 / fps));
+
+    const frameCanvas = document.createElement('canvas');
+    frameCanvas.width = width;
+    frameCanvas.height = height;
+    const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+
+    const frames = [];
+    const originalBytes = [...currentSuffixBytes];
+    computeCancelRequested = false;
+    showComputeOverlay('计算中...', reason);
+    setComputeProgress(0, totalFrames);
+    setFrameComputeProgress(0, 1);
+
+    try {
+        for (let i = 0; i < totalFrames; i++) {
+            if (computeCancelRequested) return null;
+            if (computeSubtitle) computeSubtitle.textContent = `${reason}（${i + 1}/${totalFrames}）`;
+            setFrameComputeProgress(0, 1);
+
+            const t = Math.min(duration - 0.001, i / fps);
+            await seekVideo(video, t);
+            fctx.clearRect(0, 0, width, height);
+            fctx.drawImage(video, 0, 0, width, height);
+
+            await processSingleFrameCanvas(frameCanvas, false);
+            frames.push({
+                imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
+                delay,
+                artisticStats: lastArtisticSolveStats ? { ...lastArtisticSolveStats } : null
+            });
+
+            setFrameComputeProgress(1, 1);
+            setComputeProgress(i + 1, totalFrames);
+        }
+
+        animatedArtCache = { key: cacheKey, frames };
+        return animatedArtCache;
+    } finally {
+        currentSuffixBytes = [...originalBytes];
+        renderQR(false);
+        hideComputeOverlay();
+    }
 }
 
 function getAnimatedArtCacheKey() {
@@ -357,7 +419,10 @@ function getAnimatedArtCacheKey() {
         importH: precise(importState.height),
         importX: precise(importState.relX),
         importY: precise(importState.relY),
-        frames: uploadInfo && uploadInfo.gifFrames ? uploadInfo.gifFrames.length : 0
+        frames: uploadInfo && uploadInfo.gifFrames ? uploadInfo.gifFrames.length : 0,
+        isVideo: !!(uploadInfo && uploadInfo.isVideo),
+        videoDuration: precise(uploadInfo && uploadInfo.videoDuration ? uploadInfo.videoDuration : 0),
+        videoFps: precise(uploadInfo && uploadInfo.videoFps ? uploadInfo.videoFps : 0)
     });
 }
 
@@ -4128,7 +4193,8 @@ function drawAt(e) {
     lastDrawPos = { r, c };
 
     if (changed) {
-        updateQR({ skipArtisticPass: true });
+        const artOn = !!(artisticModeCb && artisticModeCb.checked);
+        updateQR({ skipArtisticPass: !artOn });
     }
 }
 
@@ -4699,30 +4765,18 @@ async function exportVideoBlob() {
         srcVideo.addEventListener('error', onError, { once: true });
     });
 
-    const width = srcVideo.videoWidth || uploadInfo.gifWidth || 0;
-    const height = srcVideo.videoHeight || uploadInfo.gifHeight || 0;
-    if (width <= 0 || height <= 0) {
-        throw new Error('视频尺寸无效');
+    const cache = await processVideoFramesForPreview('正在逐帧计算导出内容');
+    if (!cache || !cache.frames || !cache.frames.length) {
+        throw new Error('导出已取消');
     }
-
-    const fps = Math.max(1, Math.min(60, Math.round(uploadInfo.videoFps || 30)));
-    const duration = Math.max(0.01, srcVideo.duration || uploadInfo.videoDuration || 0.01);
-    const totalFrames = Math.max(1, Math.floor(duration * fps));
-    const frameDelay = 1000 / fps;
-
-    const frameCanvas = document.createElement('canvas');
-    frameCanvas.width = width;
-    frameCanvas.height = height;
-    const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+    const totalFrames = cache.frames.length;
+    const frameDelay = cache.frames[0] && cache.frames[0].delay ? cache.frames[0].delay : 33;
+    const fps = Math.max(1, Math.round(1000 / frameDelay));
 
     const outputCanvas = document.createElement('canvas');
     outputCanvas.width = Math.max(1, canvas.width);
     outputCanvas.height = Math.max(1, canvas.height);
     const octx = outputCanvas.getContext('2d', { willReadFrequently: true });
-
-    showComputeOverlay('计算中...', '正在逐帧计算导出内容');
-    setComputeProgress(0, totalFrames);
-    setFrameComputeProgress(0, 1);
 
     const stream = outputCanvas.captureStream(fps);
     let audioTrack = null;
@@ -4755,35 +4809,30 @@ async function exportVideoBlob() {
     computeCancelRequested = false;
     recorder.start(Math.max(100, Math.round(frameDelay * 2)));
 
-    const originalBytes = [...currentSuffixBytes];
     try {
+        try {
+            srcVideo.currentTime = 0;
+            await srcVideo.play();
+        } catch (_) {}
         for (let i = 0; i < totalFrames; i++) {
             if (computeCancelRequested) {
                 throw new Error('导出已取消');
             }
-            if (computeSubtitle) computeSubtitle.textContent = `正在逐帧计算导出内容（${i + 1}/${totalFrames}）`;
-
-            const t = Math.min(duration - 0.001, i / fps);
-            await seekVideo(srcVideo, t);
-            fctx.clearRect(0, 0, width, height);
-            fctx.drawImage(srcVideo, 0, 0, width, height);
-
-            await processSingleFrameCanvas(frameCanvas, true);
+            const item = cache.frames[i];
             octx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+            if (item && item.imageData) {
+                ctx.putImageData(item.imageData, 0, 0);
+            }
             octx.drawImage(canvas, 0, 0, outputCanvas.width, outputCanvas.height);
-
-            setFrameComputeProgress(1, 1);
-            setComputeProgress(i + 1, totalFrames);
-            await new Promise((resolve) => setTimeout(resolve, frameDelay));
+            await new Promise((resolve) => setTimeout(resolve, item && item.delay ? item.delay : frameDelay));
         }
     } finally {
-        currentSuffixBytes = [...originalBytes];
         renderQR(false);
+        try { srcVideo.pause(); } catch (_) {}
         try {
             if (recorder.state !== 'inactive') recorder.stop();
         } catch (_) {}
         await recorderDone;
-        hideComputeOverlay();
     }
 
     const blobType = recorderMime || 'video/webm';
