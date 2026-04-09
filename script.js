@@ -3788,8 +3788,8 @@ function renderQR(isExport, imageOverride) {
             }
 
             const covered = coverRatio >= 0.12;
-            const basisGhost = basisMode && (embedImage || artisticMode);
-            const nonBasisGhost = !basisMode && (embedImage || artisticMode) && covered;
+            const basisGhost = basisMode && embedImage;
+            const nonBasisGhost = !basisMode && embedImage && covered;
             const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
             if (useGhost) {
                 const smallSize = Math.min(moduleW, moduleH) / 2;
