@@ -5073,18 +5073,13 @@ async function exportVideoBlob() {
         throw new Error('导出已取消');
     }
     const totalFrames = cache.frames.length;
-    const rawFrameTimes = cache.frames.map((item, idx) => {
-        if (item && typeof item.timeSec === 'number' && Number.isFinite(item.timeSec)) {
-            return Math.max(0, item.timeSec);
-        }
-        const d = item && item.delay ? item.delay : 33;
-        return Math.max(0, idx * (d / 1000));
-    });
-    const firstTime = rawFrameTimes.length ? rawFrameTimes[0] : 0;
-    const frameTimes = rawFrameTimes.map((t) => Math.max(0, t - firstTime));
+    const sourceDuration = Math.max(
+        0.01,
+        srcVideo.duration || uploadInfo.videoDuration || (totalFrames / Math.max(1, uploadInfo.videoFps || 30))
+    );
     const durationEstimate = Math.max(
         0.01,
-        srcVideo.duration || uploadInfo.videoDuration || frameTimes[frameTimes.length - 1] || (totalFrames / 30)
+        sourceDuration
     );
     const streamFps = Math.max(1, Math.min(60, Math.round(totalFrames / durationEstimate)));
     const frameDelay = Math.max(10, Math.round(1000 / streamFps));
@@ -5139,56 +5134,20 @@ async function exportVideoBlob() {
     recorder.start(Math.max(100, Math.round(frameDelay * 2)));
 
     try {
-        const duration = durationEstimate;
-        let lastIndex = -1;
-        let cursor = 0;
-        let useVideoClock = false;
-        let fallbackStartMs = performance.now();
-        let fallbackStartAtSec = 0;
         if (hasAudioTrack) {
             try {
                 srcVideo.playbackRate = 1;
                 srcVideo.currentTime = 0;
                 await srcVideo.play();
-                useVideoClock = true;
             } catch (_) {}
         }
 
-        while (true) {
+        for (let i = 0; i < totalFrames; i++) {
             if (computeCancelRequested) {
                 throw new Error('导出已取消');
             }
-
-            let ct = 0;
-            if (useVideoClock) {
-                ct = Math.max(0, Number(srcVideo.currentTime) || 0);
-                if (!Number.isFinite(ct) || ct <= 0.0001) {
-                    useVideoClock = false;
-                    fallbackStartMs = performance.now();
-                    fallbackStartAtSec = 0;
-                }
-            }
-            if (!useVideoClock) {
-                ct = Math.max(0, fallbackStartAtSec + ((performance.now() - fallbackStartMs) / 1000));
-            }
-
-            while (cursor + 1 < totalFrames && frameTimes[cursor + 1] <= ct + 0.0005) {
-                cursor += 1;
-            }
-            if (cursor !== lastIndex) {
-                paintFrameByIndex(cursor);
-                lastIndex = cursor;
-            }
-
-            if ((useVideoClock && srcVideo.ended) || ct >= duration - (1 / Math.max(2, streamFps))) {
-                break;
-            }
-
-            if (useVideoClock) {
-                await waitNextVideoFrame(srcVideo, Math.max(300, frameDelay * 2));
-            } else {
-                await new Promise((resolve) => setTimeout(resolve, Math.max(8, Math.round(frameDelay / 2))));
-            }
+            paintFrameByIndex(i);
+            await new Promise((resolve) => setTimeout(resolve, frameDelay));
         }
 
         paintFrameByIndex(totalFrames - 1);
