@@ -851,6 +851,7 @@ async function startGifPreview() {
     if (!uploadInfo || !uploadInfo.isAnimated || !dynamicPreviewCb || !dynamicPreviewCb.checked) return;
     const token = ++previewSessionToken;
     computeCancelRequested = false;
+    animatedPreviewBaseSuffixBytes = [...currentSuffixBytes];
 
     if (uploadInfo.isVideo) {
         await startVideoPreview(token);
@@ -930,6 +931,7 @@ let gifPreviewPrevImageData = null;
 let videoPreviewRafId = null;
 let videoPreviewRunning = false;
 let previewSessionToken = 0;
+let animatedPreviewBaseSuffixBytes = null;
 let lastCopiedAnimatedUrl = null;
 
 // History & Zoom
@@ -1787,13 +1789,27 @@ function init() {
     if (dynamicPreviewCb) {
         dynamicPreviewCb.disabled = true;
         dynamicPreviewCb.checked = false;
-        dynamicPreviewCb.addEventListener('change', () => {
+        dynamicPreviewCb.addEventListener('change', async () => {
             if (dynamicPreviewCb.checked) {
                 startGifPreview();
             } else {
                 stopGifPreview();
                 if (uploadInfo && uploadInfo.isAnimated && (uploadInfo.gifFrames || uploadInfo.isVideo)) {
+                    if (animatedPreviewBaseSuffixBytes && animatedPreviewBaseSuffixBytes.length) {
+                        currentSuffixBytes = [...animatedPreviewBaseSuffixBytes];
+                    }
                     setStaticGifPreview();
+
+                    const artisticOn = !!(artisticModeCb && artisticModeCb.checked);
+                    if (uploadInfo.isVideo && gifPreviewCanvas) {
+                        await applyImport(false, gifPreviewCanvas, true, { skipArtisticPass: !artisticOn });
+                        renderQR(false, gifPreviewCanvas);
+                    } else {
+                        await applyImport(false, previewImg, true, { skipArtisticPass: !artisticOn });
+                        renderQR(false);
+                    }
+                    animatedPreviewBaseSuffixBytes = null;
+                    return;
                 }
                 renderQR(false);
             }
