@@ -3216,9 +3216,9 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         if (!targets.length) continue;
         totalTargets += targets.length;
         const allowCoveredFreedom = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
-        if (allowCoveredFreedom && freedoms.length < targets.length && coveredFreedoms.length > 0) {
-            const need = targets.length - freedoms.length;
-            const supplement = coveredFreedoms.slice(0, need);
+        if (allowCoveredFreedom && coveredFreedoms.length > 0) {
+            const existing = new Set(freedoms);
+            const supplement = coveredFreedoms.filter((g) => !existing.has(g));
             coveredFreedomUsed += supplement.length;
             freedoms = freedoms.concat(supplement);
         }
