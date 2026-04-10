@@ -4308,7 +4308,7 @@ function renderQR(isExport, imageOverride) {
             const covered = coverRatio > 0;
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
-            const useGhost = (basisGhost || nonBasisGhost) && cell && cell.type === 'data' && isEditableDataCell(cell);
+            const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
             if (useGhost) {
                 const smallSize = Math.min(moduleW, moduleH) / 2;
                 const offsetX = (moduleW - smallSize) / 2;
@@ -4317,6 +4317,7 @@ function renderQR(isExport, imageOverride) {
                 const cy = Math.floor(y + moduleH / 2);
                 let lum = sampledLum;
                 let isTransparent = moduleTransparent;
+                const isProtectedZone = !!(cell && (cell.type === 'ec' || (cell.type === 'data' && !isEditableDataCell(cell))));
 
                 if (isTransparent && bgData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                     const idx = (cy * canvas.width + cx) * 4;
@@ -4333,6 +4334,15 @@ function renderQR(isExport, imageOverride) {
                         y,
                         moduleW,
                         moduleH,
+                        activeStyle,
+                        isDark ? fgColor : bgColor
+                    );
+                } else if (isProtectedZone) {
+                    drawStyledModule(
+                        x + offsetX,
+                        y + offsetY,
+                        smallSize,
+                        smallSize,
                         activeStyle,
                         isDark ? fgColor : bgColor
                     );
