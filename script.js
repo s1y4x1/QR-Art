@@ -232,6 +232,47 @@ function waitNextVideoFrame(video, timeoutMs = 1200) {
     });
 }
 
+function waitForVideoClockAdvance(video, previousTimeSec, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve();
+        };
+        const onTick = () => {
+            const ct = Math.max(0, Number(video && video.currentTime) || 0);
+            if ((video && video.ended) || ct > previousTimeSec + 0.0005) {
+                done();
+            }
+        };
+        const cleanup = () => {
+            if (!video) return;
+            video.removeEventListener('timeupdate', onTick);
+            video.removeEventListener('ended', onTick);
+            if (timer) clearTimeout(timer);
+        };
+
+        const timer = setTimeout(() => {
+            done();
+        }, Math.max(1000, timeoutMs));
+
+        if (video) {
+            video.addEventListener('timeupdate', onTick);
+            video.addEventListener('ended', onTick);
+            if (typeof video.requestVideoFrameCallback === 'function') {
+                video.requestVideoFrameCallback(() => {
+                    onTick();
+                    done();
+                });
+            }
+        }
+
+        onTick();
+    });
+}
+
 async function extractVideoFirstFrame(video) {
     const width = video.videoWidth || 0;
     const height = video.videoHeight || 0;
@@ -5183,21 +5224,33 @@ async function exportVideoBlob() {
     recorder.start();
 
     try {
-        if (hasAudioTrack) {
-            try {
-                srcVideo.playbackRate = 1;
-                srcVideo.currentTime = 0;
-                await srcVideo.play();
-            } catch (_) {}
+        try {
+            srcVideo.playbackRate = 1;
+            srcVideo.currentTime = 0;
+            await srcVideo.play();
+        } catch (_) {
+            throw new Error('导出视频失败：无法启动视频时钟');
         }
 
-        for (let i = 0; i < totalFrames; i++) {
+        let lastIndex = -1;
+        while (true) {
             if (computeCancelRequested) {
                 throw new Error('导出已取消');
             }
-            paintFrameByIndex(i);
-            const perFrameDelay = cache.frames[i] && cache.frames[i].delay ? Math.max(10, cache.frames[i].delay) : frameDelay;
-            await new Promise((resolve) => setTimeout(resolve, perFrameDelay));
+
+            const ct = Math.max(0, Number(srcVideo.currentTime) || 0);
+            const normalized = durationEstimate > 0 ? Math.min(1, ct / durationEstimate) : 0;
+            const frameIndex = Math.max(0, Math.min(totalFrames - 1, Math.floor(normalized * totalFrames)));
+            if (frameIndex !== lastIndex) {
+                paintFrameByIndex(frameIndex);
+                lastIndex = frameIndex;
+            }
+
+            if (srcVideo.ended || ct >= durationEstimate - (1 / Math.max(2, streamFps))) {
+                break;
+            }
+
+            await waitForVideoClockAdvance(srcVideo, ct, Math.max(1200, frameDelay * 4));
         }
 
         paintFrameByIndex(totalFrames - 1);
