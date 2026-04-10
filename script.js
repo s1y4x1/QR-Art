@@ -5015,13 +5015,13 @@ async function exportGifBlob() {
 function pickWebmRecorderMimeType(hasAudioTrack = true) {
     const candidates = hasAudioTrack
         ? [
-            'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
+            'video/webm;codecs=vp9,opus',
             'video/webm'
         ]
         : [
-            'video/webm;codecs=vp9',
             'video/webm;codecs=vp8',
+            'video/webm;codecs=vp9',
             'video/webm'
         ];
     for (const mime of candidates) {
@@ -5042,7 +5042,8 @@ async function exportVideoBlob() {
 
     const srcVideo = document.createElement('video');
     srcVideo.preload = 'auto';
-    srcVideo.muted = false;
+    srcVideo.muted = true;
+    srcVideo.volume = 0;
     srcVideo.playsInline = true;
     srcVideo.crossOrigin = 'anonymous';
     srcVideo.src = uploadInfo.videoObjectUrl;
@@ -5072,13 +5073,15 @@ async function exportVideoBlob() {
         throw new Error('导出已取消');
     }
     const totalFrames = cache.frames.length;
-    const frameTimes = cache.frames.map((item, idx) => {
+    const rawFrameTimes = cache.frames.map((item, idx) => {
         if (item && typeof item.timeSec === 'number' && Number.isFinite(item.timeSec)) {
             return Math.max(0, item.timeSec);
         }
         const d = item && item.delay ? item.delay : 33;
         return Math.max(0, idx * (d / 1000));
     });
+    const firstTime = rawFrameTimes.length ? rawFrameTimes[0] : 0;
+    const frameTimes = rawFrameTimes.map((t) => Math.max(0, t - firstTime));
     const durationEstimate = Math.max(
         0.01,
         srcVideo.duration || uploadInfo.videoDuration || frameTimes[frameTimes.length - 1] || (totalFrames / 30)
@@ -5142,12 +5145,14 @@ async function exportVideoBlob() {
         let useVideoClock = false;
         let fallbackStartMs = performance.now();
         let fallbackStartAtSec = 0;
-        try {
-            srcVideo.playbackRate = 1;
-            srcVideo.currentTime = 0;
-            await srcVideo.play();
-            useVideoClock = true;
-        } catch (_) {}
+        if (hasAudioTrack) {
+            try {
+                srcVideo.playbackRate = 1;
+                srcVideo.currentTime = 0;
+                await srcVideo.play();
+                useVideoClock = true;
+            } catch (_) {}
+        }
 
         while (true) {
             if (computeCancelRequested) {
