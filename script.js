@@ -4308,7 +4308,7 @@ function renderQR(isExport, imageOverride) {
             const covered = coverRatio > 0;
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
-            const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
+            const useGhost = (basisGhost || nonBasisGhost) && cell && cell.type === 'data' && isEditableDataCell(cell);
             if (useGhost) {
                 const smallSize = Math.min(moduleW, moduleH) / 2;
                 const offsetX = (moduleW - smallSize) / 2;
