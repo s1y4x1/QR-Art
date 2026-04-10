@@ -3279,6 +3279,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         if (onProgress) onProgress(bi * 3 + 1, totalProgressSteps);
 
         const solution = solveLinearGF2(matrix, rhs, freedoms.length);
+        let workingBits = baseBits.slice();
         if (solution) {
             for (let j = 0; j < freedoms.length; j++) {
                 if (isCanceled()) return { canceled: true };
@@ -3289,25 +3290,53 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
                 if (bIdx < 0 || bIdx >= work.length) continue;
                 work[bIdx] ^= (1 << bitPos);
             }
-            bestMismatch = evalMismatchFromBits(evalQrBits(work));
+            workingBits = evalQrBits(work);
+            bestMismatch = evalMismatchFromBits(workingBits);
         }
         if (onProgress) onProgress(bi * 3 + 2, totalProgressSteps);
 
-        const greedyTries = Math.min(32, freedoms.length);
-        for (let i = 0; i < greedyTries; i++) {
-            if (isCanceled()) return { canceled: true };
-            const g = freedoms[i];
-            const bIdx = Math.floor(g / 8);
-            const bitPos = 7 - (g % 8);
-            if (bIdx < 0 || bIdx >= work.length) continue;
-            work[bIdx] ^= (1 << bitPos);
-            const nowMismatch = evalMismatchFromBits(evalQrBits(work));
-            if (nowMismatch <= bestMismatch) {
-                bestMismatch = nowMismatch;
-            } else {
-                work[bIdx] ^= (1 << bitPos);
-            }
+        if (!solution) {
+            workingBits = baseBits.slice();
+            bestMismatch = evalMismatchFromBits(workingBits);
         }
+
+        // Local improvement on top of linear solve result:
+        // try beneficial single-bit flips using the precomputed influence matrix.
+        const hillPasses = 3;
+        for (let pass = 0; pass < hillPasses && bestMismatch > 0; pass++) {
+            let improvedThisPass = false;
+            for (let j = 0; j < freedoms.length; j++) {
+                if (isCanceled()) return { canceled: true };
+                let delta = 0;
+                for (let i = 0; i < targets.length; i++) {
+                    if (!matrix[i][j]) continue;
+                    const beforeMismatch = workingBits[i] !== targets[i].t;
+                    delta += beforeMismatch ? -1 : 1;
+                }
+                if (delta >= 0) continue;
+
+                const g = freedoms[j];
+                const bIdx = Math.floor(g / 8);
+                const bitPos = 7 - (g % 8);
+                if (bIdx < 0 || bIdx >= work.length) continue;
+                work[bIdx] ^= (1 << bitPos);
+
+                for (let i = 0; i < targets.length; i++) {
+                    if (matrix[i][j]) workingBits[i] ^= 1;
+                }
+
+                bestMismatch += delta;
+                improvedThisPass = true;
+                if ((j & 63) === 63) {
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                }
+                if (bestMismatch <= 0) break;
+            }
+            if (!improvedThisPass) break;
+        }
+
+        // Final precise check against fully rebuilt QR state.
+        bestMismatch = evalMismatchFromBits(evalQrBits(work));
 
         remainingMismatch += bestMismatch;
 
