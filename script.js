@@ -4397,6 +4397,7 @@ function renderQR(isExport, imageOverride) {
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
             const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
+            const isProtectedOverlayCell = !!(cell && (cell.type === 'ec' || (cell.type === 'data' && !isEditableDataCell(cell))));
             if (useGhost) {
                 const smallSize = Math.min(moduleW, moduleH) / 2;
                 const offsetX = (moduleW - smallSize) / 2;
@@ -4431,6 +4432,14 @@ function renderQR(isExport, imageOverride) {
                         if (lum >= 0.25) {
                             shouldDraw = true;
                             alpha = Math.max(0, Math.min(1, 1 - (0.25 / lum)));
+                        }
+                        if (isProtectedOverlayCell) {
+                            if (!shouldDraw) {
+                                shouldDraw = true;
+                                alpha = 0.35;
+                            } else {
+                                alpha = Math.max(alpha, 0.35);
+                            }
                         }
                         if (shouldDraw) {
                             drawStyledModule(
