@@ -4317,7 +4317,6 @@ function renderQR(isExport, imageOverride) {
                 const cy = Math.floor(y + moduleH / 2);
                 let lum = sampledLum;
                 let isTransparent = moduleTransparent;
-                const isProtectedZone = !!(cell && (cell.type === 'ec' || (cell.type === 'data' && !isEditableDataCell(cell))));
 
                 if (isTransparent && bgData && cx >= 0 && cx < canvas.width && cy >= 0 && cy < canvas.height) {
                     const idx = (cy * canvas.width + cx) * 4;
@@ -4334,15 +4333,6 @@ function renderQR(isExport, imageOverride) {
                         y,
                         moduleW,
                         moduleH,
-                        activeStyle,
-                        isDark ? fgColor : bgColor
-                    );
-                } else if (isProtectedZone) {
-                    drawStyledModule(
-                        x + offsetX,
-                        y + offsetY,
-                        smallSize,
-                        smallSize,
                         activeStyle,
                         isDark ? fgColor : bgColor
                     );
@@ -5131,11 +5121,6 @@ async function exportVideoBlob() {
         recorder.onstop = () => resolve();
     });
 
-    computeCancelRequested = false;
-    paintFrameByIndex(0);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    recorder.start(Math.max(100, Math.round(frameDelay * 2)));
-
     const paintFrameByIndex = (index) => {
         const idx = Math.max(0, Math.min(totalFrames - 1, index));
         const item = cache.frames[idx];
@@ -5144,6 +5129,11 @@ async function exportVideoBlob() {
             octx.putImageData(item.imageData, 0, 0);
         }
     };
+
+    computeCancelRequested = false;
+    paintFrameByIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    recorder.start(Math.max(100, Math.round(frameDelay * 2)));
 
     try {
         const duration = durationEstimate;
@@ -5202,12 +5192,18 @@ async function exportVideoBlob() {
         renderQR(false);
         try { srcVideo.pause(); } catch (_) {}
         try {
+            if (typeof recorder.requestData === 'function' && recorder.state === 'recording') {
+                recorder.requestData();
+            }
             if (recorder.state !== 'inactive') recorder.stop();
         } catch (_) {}
         await recorderDone;
     }
 
     const blobType = recorderMime || 'video/webm';
+    if (!chunks.length) {
+        throw new Error('导出视频失败：未生成帧数据');
+    }
     return new Blob(chunks, { type: blobType });
 }
 
