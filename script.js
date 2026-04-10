@@ -182,8 +182,25 @@ function seekVideo(video, timeSec) {
         };
         video.addEventListener('seeked', onSeeked, { once: true });
         video.addEventListener('error', onError, { once: true });
-        video.currentTime = Math.max(0, Math.min(timeSec || 0, Math.max(0, (video.duration || 0) - 0.001)));
+        const safeDuration = getSafeVideoDuration(video, 0);
+        const maxTime = safeDuration > 0 ? Math.max(0, safeDuration - 0.001) : Math.max(0, Number(timeSec) || 0);
+        video.currentTime = Math.max(0, Math.min(Number(timeSec) || 0, maxTime));
     });
+}
+
+function getSafeVideoDuration(video, fallback = 0) {
+    if (video) {
+        const d = Number(video.duration);
+        if (Number.isFinite(d) && d > 0) return d;
+        try {
+            if (video.seekable && video.seekable.length > 0) {
+                const end = Number(video.seekable.end(video.seekable.length - 1));
+                if (Number.isFinite(end) && end > 0) return end;
+            }
+        } catch (_) {}
+    }
+    const fb = Number(fallback);
+    return (Number.isFinite(fb) && fb > 0) ? fb : 0;
 }
 
 function waitNextVideoFrame(video, timeoutMs = 1200) {
@@ -559,7 +576,8 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     if (width <= 0 || height <= 0) return null;
 
     const fps = Math.max(1, Math.min(60, Math.round(uploadInfo.videoFps || 30)));
-    const duration = Math.max(0.01, video.duration || uploadInfo.videoDuration || 0.01);
+    const duration = Math.max(0.01, getSafeVideoDuration(video, uploadInfo.videoDuration || 0.01));
+    uploadInfo.videoDuration = duration;
     const totalFrames = Math.max(1, Math.floor(duration * fps));
     const delay = Math.max(10, Math.round(1000 / fps));
     const shouldShowProgress = forExport ? true : (artisticOn && totalFrames > 20);
@@ -5075,13 +5093,15 @@ async function exportVideoBlob() {
     const totalFrames = cache.frames.length;
     const sourceDuration = Math.max(
         0.01,
-        srcVideo.duration || uploadInfo.videoDuration || (totalFrames / Math.max(1, uploadInfo.videoFps || 30))
+        getSafeVideoDuration(srcVideo, uploadInfo.videoDuration || (totalFrames / Math.max(1, uploadInfo.videoFps || 30)))
     );
     const durationEstimate = Math.max(
         0.01,
         sourceDuration
     );
-    const streamFps = Math.max(1, Math.min(60, Math.round(totalFrames / durationEstimate)));
+    const preferredFps = Math.max(1, Math.min(60, Math.round(uploadInfo.videoFps || 30)));
+    const inferredFps = Math.round(totalFrames / durationEstimate);
+    const streamFps = Math.max(1, Math.min(60, inferredFps > 1 ? inferredFps : preferredFps));
     const frameDelay = Math.max(10, Math.round(1000 / streamFps));
 
     const outputCanvas = document.createElement('canvas');
@@ -5131,7 +5151,7 @@ async function exportVideoBlob() {
     computeCancelRequested = false;
     paintFrameByIndex(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    recorder.start(Math.max(100, Math.round(frameDelay * 2)));
+    recorder.start();
 
     try {
         if (hasAudioTrack) {
@@ -5147,7 +5167,8 @@ async function exportVideoBlob() {
                 throw new Error('导出已取消');
             }
             paintFrameByIndex(i);
-            await new Promise((resolve) => setTimeout(resolve, frameDelay));
+            const perFrameDelay = cache.frames[i] && cache.frames[i].delay ? Math.max(10, cache.frames[i].delay) : frameDelay;
+            await new Promise((resolve) => setTimeout(resolve, perFrameDelay));
         }
 
         paintFrameByIndex(totalFrames - 1);
@@ -5229,7 +5250,7 @@ async function handleImageUpload(e) {
             uploadInfo.isAnimated = true;
             uploadInfo.animatedType = 'video';
             uploadInfo.videoObjectUrl = objectUrl;
-            uploadInfo.videoDuration = Math.max(0, video.duration || 0);
+            uploadInfo.videoDuration = Math.max(0, getSafeVideoDuration(video, 0));
             uploadInfo.videoElement = video;
             uploadInfo.gifWidth = video.videoWidth || 0;
             uploadInfo.gifHeight = video.videoHeight || 0;
