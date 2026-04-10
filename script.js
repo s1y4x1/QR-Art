@@ -621,7 +621,9 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     uploadInfo.videoDuration = duration;
     const totalFrames = Math.max(1, Math.floor(duration * fps));
     const delay = Math.max(10, Math.round(1000 / fps));
+    const allowCovered = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
     const shouldShowProgress = forExport ? true : (artisticOn && totalFrames > 20);
+    const showFrameProgress = forExport ? allowCovered : (artisticOn && totalFrames > 20);
 
     const frameCanvas = document.createElement('canvas');
     frameCanvas.width = width;
@@ -634,9 +636,11 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     suppressComputeOverlay = shouldShowProgress || artisticOn;
     const frameEpsilon = 1 / Math.max(120, fps * 4);
     if (shouldShowProgress) {
-        showComputeOverlay('计算中...', reason, { showFrameProgress: true });
+        showComputeOverlay('计算中...', reason, { showFrameProgress });
         setComputeProgress(0, totalFrames);
-        setFrameComputeProgress(0, 1);
+        if (showFrameProgress) {
+            setFrameComputeProgress(0, 1);
+        }
     }
 
     try {
@@ -646,7 +650,9 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
             if (computeCancelRequested) return null;
             if (shouldShowProgress) {
                 if (computeSubtitle) computeSubtitle.textContent = reason;
-                setFrameComputeProgress(0, 1);
+                if (showFrameProgress) {
+                    setFrameComputeProgress(0, 1);
+                }
             }
 
             const targetTime = Math.min(Math.max(0, duration - frameEpsilon), i / fps);
@@ -681,7 +687,9 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
             });
 
             if (shouldShowProgress) {
-                setFrameComputeProgress(1, 1);
+                if (showFrameProgress) {
+                    setFrameComputeProgress(1, 1);
+                }
                 setComputeProgress(i + 1, totalFrames);
             }
         }
