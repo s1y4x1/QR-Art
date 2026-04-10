@@ -5022,12 +5022,18 @@ async function exportGifBlob() {
     });
 }
 
-function pickWebmRecorderMimeType() {
-    const candidates = [
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm'
-    ];
+function pickWebmRecorderMimeType(hasAudioTrack = true) {
+    const candidates = hasAudioTrack
+        ? [
+            'video/webm;codecs=vp9,opus',
+            'video/webm;codecs=vp8,opus',
+            'video/webm'
+        ]
+        : [
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm'
+        ];
     for (const mime of candidates) {
         if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mime)) {
             return mime;
@@ -5097,6 +5103,7 @@ async function exportVideoBlob() {
 
     const stream = outputCanvas.captureStream(streamFps);
     let audioTrack = null;
+    let hasAudioTrack = false;
     try {
         const audioStream = srcVideo.captureStream ? srcVideo.captureStream() : null;
         if (audioStream) {
@@ -5104,6 +5111,7 @@ async function exportVideoBlob() {
             if (tracks && tracks.length > 0) {
                 audioTrack = tracks[0];
                 stream.addTrack(audioTrack);
+                hasAudioTrack = true;
             }
         }
     } catch (err) {
@@ -5111,7 +5119,7 @@ async function exportVideoBlob() {
     }
 
     const chunks = [];
-    const recorderMime = pickWebmRecorderMimeType();
+    const recorderMime = pickWebmRecorderMimeType(hasAudioTrack);
     const recorder = recorderMime
         ? new MediaRecorder(stream, { mimeType: recorderMime, videoBitsPerSecond: 8_000_000 })
         : new MediaRecorder(stream);
@@ -5124,6 +5132,8 @@ async function exportVideoBlob() {
     });
 
     computeCancelRequested = false;
+    paintFrameByIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     recorder.start(Math.max(100, Math.round(frameDelay * 2)));
 
     const paintFrameByIndex = (index) => {
@@ -5139,10 +5149,14 @@ async function exportVideoBlob() {
         const duration = durationEstimate;
         let lastIndex = -1;
         let cursor = 0;
+        let useVideoClock = false;
+        let fallbackStartMs = performance.now();
+        let fallbackStartAtSec = 0;
         try {
             srcVideo.playbackRate = 1;
             srcVideo.currentTime = 0;
             await srcVideo.play();
+            useVideoClock = true;
         } catch (_) {}
 
         while (true) {
@@ -5150,7 +5164,19 @@ async function exportVideoBlob() {
                 throw new Error('导出已取消');
             }
 
-            const ct = Math.max(0, srcVideo.currentTime || 0);
+            let ct = 0;
+            if (useVideoClock) {
+                ct = Math.max(0, Number(srcVideo.currentTime) || 0);
+                if (!Number.isFinite(ct) || ct <= 0.0001) {
+                    useVideoClock = false;
+                    fallbackStartMs = performance.now();
+                    fallbackStartAtSec = 0;
+                }
+            }
+            if (!useVideoClock) {
+                ct = Math.max(0, fallbackStartAtSec + ((performance.now() - fallbackStartMs) / 1000));
+            }
+
             while (cursor + 1 < totalFrames && frameTimes[cursor + 1] <= ct + 0.0005) {
                 cursor += 1;
             }
@@ -5159,11 +5185,15 @@ async function exportVideoBlob() {
                 lastIndex = cursor;
             }
 
-            if (srcVideo.ended || ct >= duration - (1 / Math.max(2, streamFps))) {
+            if ((useVideoClock && srcVideo.ended) || ct >= duration - (1 / Math.max(2, streamFps))) {
                 break;
             }
 
-            await waitNextVideoFrame(srcVideo, Math.max(300, frameDelay * 2));
+            if (useVideoClock) {
+                await waitNextVideoFrame(srcVideo, Math.max(300, frameDelay * 2));
+            } else {
+                await new Promise((resolve) => setTimeout(resolve, Math.max(8, Math.round(frameDelay / 2))));
+            }
         }
 
         paintFrameByIndex(totalFrames - 1);
