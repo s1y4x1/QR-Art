@@ -1711,6 +1711,7 @@ function init() {
             if (!hasImageUpload) return;
             invalidateAnimatedArtCache();
             resetSuffix();
+            await updateQR({ skipArtisticPass: true });
             if (importState.active) {
                 await applyImport(true, previewImg, true);
                 return;
@@ -3758,17 +3759,17 @@ function setSuffixUniform(targetColor) { // targetColor: 0=White, 1=Black
                              const bVal = imgData.data[idx+2];
                              const aVal = imgData.data[idx+3];
                              if (aVal < 10) {
-                                 needsChange = false;
-                                 continue;
-                             }
+                                 effectiveTarget = targetColor;
+                             } else {
                              
-                             const bgVal = (targetColor === 0) ? 255 : 0; // targetColor 0=White, 1=Black.
-                             const fA = aVal / 255.0;
-                             const blendR = rVal * fA + bgVal * (1 - fA);
-                             const blendG = gVal * fA + bgVal * (1 - fA);
-                             const blendB = bVal * fA + bgVal * (1 - fA);
-                             const luma = 0.299 * blendR + 0.587 * blendG + 0.114 * blendB;
-                             effectiveTarget = getTargetColorFromLuminance(luma);
+                                 const bgVal = (targetColor === 0) ? 255 : 0; // targetColor 0=White, 1=Black.
+                                 const fA = aVal / 255.0;
+                                 const blendR = rVal * fA + bgVal * (1 - fA);
+                                 const blendG = gVal * fA + bgVal * (1 - fA);
+                                 const blendB = bVal * fA + bgVal * (1 - fA);
+                                 const luma = 0.299 * blendR + 0.587 * blendG + 0.114 * blendB;
+                                 effectiveTarget = getTargetColorFromLuminance(luma);
+                             }
                      }
                  }
             
