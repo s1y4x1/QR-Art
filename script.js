@@ -1080,6 +1080,7 @@ const bgColorHexInput = document.getElementById('bg-color-hex');
 const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
+const invertToneCb = document.getElementById('invert-tone-cb');
 const exportAudioCb = document.getElementById('export-audio-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
 const artisticModeCb = document.getElementById('artistic-mode');
@@ -1130,6 +1131,18 @@ function getSourceDimensions(imageSource = previewImg) {
         width: imageSource.naturalWidth || imageSource.videoWidth || imageSource.width || 0,
         height: imageSource.naturalHeight || imageSource.videoHeight || imageSource.height || 0
     };
+}
+
+function isToneInverted() {
+    return !!(invertToneCb && !invertToneCb.disabled && invertToneCb.checked);
+}
+
+function getTargetColorFromLuminance(lum) {
+    const dark = Number(lum) < BINARIZE_THRESHOLD;
+    if (isToneInverted()) {
+        return dark ? 0 : 1;
+    }
+    return dark ? 1 : 0;
 }
 
 function isFinderCell(r, c, count) {
@@ -1691,8 +1704,19 @@ function init() {
         embedImageCb.disabled = true;
     }
 
+    if (invertToneCb) {
+        invertToneCb.checked = false;
+        invertToneCb.disabled = true;
+        invertToneCb.addEventListener('change', async () => {
+            if (!hasImageUpload || !importState.active) return;
+            resetSuffix();
+            await applyImport(true, previewImg, true);
+        });
+    }
+
     if (exportAudioCb) {
         exportAudioCb.checked = true;
+        exportAudioCb.disabled = true;
     }
 
     if (artisticModeCb) {
@@ -2122,6 +2146,14 @@ function init() {
              if (allowCoveredFreedomCb) {
                  allowCoveredFreedomCb.checked = false;
                  allowCoveredFreedomCb.disabled = true;
+             }
+             if (invertToneCb) {
+                 invertToneCb.checked = false;
+                 invertToneCb.disabled = true;
+             }
+             if (exportAudioCb) {
+                 exportAudioCb.checked = true;
+                 exportAudioCb.disabled = true;
              }
              if (cellSizeAutoBtn) {
                  cellSizeAutoBtn.style.display = 'none';
@@ -3151,7 +3183,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         const gB = gg * a + bg.g * (1 - a);
         const bB = bb * a + bg.b * (1 - a);
         const lum = 0.299 * rB + 0.587 * gB + 0.114 * bB;
-        return lum < BINARIZE_THRESHOLD ? 1 : 0;
+        return getTargetColorFromLuminance(lum);
     };
 
     const mutableByBlock = new Map();
@@ -3727,7 +3759,7 @@ function setSuffixUniform(targetColor) { // targetColor: 0=White, 1=Black
                              const blendG = gVal * fA + bgVal * (1 - fA);
                              const blendB = bVal * fA + bgVal * (1 - fA);
                              const luma = 0.299 * blendR + 0.587 * blendG + 0.114 * blendB;
-                             effectiveTarget = (luma < BINARIZE_THRESHOLD) ? 1 : 0; 
+                             effectiveTarget = getTargetColorFromLuminance(luma);
                      }
                  }
             
@@ -5463,6 +5495,15 @@ async function handleImageUpload(e) {
         if (allowCoveredFreedomCb) {
             allowCoveredFreedomCb.disabled = !(artisticModeCb && artisticModeCb.checked);
         }
+        if (invertToneCb) {
+            invertToneCb.disabled = false;
+        }
+        if (exportAudioCb) {
+            exportAudioCb.disabled = !uploadInfo.isVideo;
+            if (!uploadInfo.isVideo) {
+                exportAudioCb.checked = true;
+            }
+        }
 
         hasImageUpload = true;
         basisImageWidth = previewImg.naturalWidth || previewImg.width || 0;
@@ -5639,6 +5680,14 @@ function clearImportedImage() {
     if (allowCoveredFreedomCb) {
         allowCoveredFreedomCb.checked = false;
         allowCoveredFreedomCb.disabled = true;
+    }
+    if (invertToneCb) {
+        invertToneCb.checked = false;
+        invertToneCb.disabled = true;
+    }
+    if (exportAudioCb) {
+        exportAudioCb.checked = true;
+        exportAudioCb.disabled = true;
     }
     if (cellSizeAutoBtn) cellSizeAutoBtn.style.display = 'none';
     updateMaskControls();
@@ -5955,7 +6004,7 @@ async function applyImport(doSave = true, imageSource = previewImg, forceRecalc 
                     
                     const lum = (0.299*rB + 0.587*gB + 0.114*bB); // Range 0-255
                     
-                    const targetColor = (lum < BINARIZE_THRESHOLD) ? 1 : 0; // Black : White
+                    const targetColor = getTargetColorFromLuminance(lum);
 
                     modifyPixel(r, c, targetColor);
                     changed = true;
