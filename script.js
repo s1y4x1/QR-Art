@@ -2745,21 +2745,15 @@ function drawEyePreviewPattern(pCtx, style, darkColor, moduleCount, originX, ori
 }
 
 function drawFinderPreviewPattern(pCtx, style, darkColor) {
-    const moduleSize = 12;
+    const moduleSize = Math.max(6, Math.floor(Math.min(pCtx.canvas.width, pCtx.canvas.height) / 7));
     const finderSize = 7 * moduleSize;
-    const margin = 14;
-    const positions = [
-        { x: margin, y: margin },
-        { x: pCtx.canvas.width - margin - finderSize, y: margin },
-        { x: margin, y: pCtx.canvas.height - margin - finderSize }
-    ];
-    positions.forEach((pos) => {
-        drawEyePreviewPattern(pCtx, style, darkColor, 7, pos.x, pos.y, moduleSize);
-    });
+    const originX = Math.floor((pCtx.canvas.width - finderSize) / 2);
+    const originY = Math.floor((pCtx.canvas.height - finderSize) / 2);
+    drawEyePreviewPattern(pCtx, style, darkColor, 7, originX, originY, moduleSize);
 }
 
 function drawAlignPreviewPattern(pCtx, style, darkColor) {
-    const moduleSize = 20;
+    const moduleSize = Math.max(6, Math.floor(Math.min(pCtx.canvas.width, pCtx.canvas.height) / 5));
     const alignSize = 5 * moduleSize;
     const originX = Math.floor((pCtx.canvas.width - alignSize) / 2);
     const originY = Math.floor((pCtx.canvas.height - alignSize) / 2);
