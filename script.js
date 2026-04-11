@@ -1708,9 +1708,14 @@ function init() {
         invertToneCb.checked = false;
         invertToneCb.disabled = true;
         invertToneCb.addEventListener('change', async () => {
-            if (!hasImageUpload || !importState.active) return;
+            if (!hasImageUpload) return;
+            invalidateAnimatedArtCache();
             resetSuffix();
-            await applyImport(true, previewImg, true);
+            if (importState.active) {
+                await applyImport(true, previewImg, true);
+                return;
+            }
+            await updateQR({ skipArtisticPass: true });
         });
     }
 
@@ -3752,6 +3757,10 @@ function setSuffixUniform(targetColor) { // targetColor: 0=White, 1=Black
                              const gVal = imgData.data[idx+1];
                              const bVal = imgData.data[idx+2];
                              const aVal = imgData.data[idx+3];
+                             if (aVal < 10) {
+                                 needsChange = false;
+                                 continue;
+                             }
                              
                              const bgVal = (targetColor === 0) ? 255 : 0; // targetColor 0=White, 1=Black.
                              const fA = aVal / 255.0;
