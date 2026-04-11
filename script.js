@@ -5441,28 +5441,28 @@ async function exportVideoBlob() {
                 throw new Error('导出视频失败：无法启动视频时钟');
             }
 
-            let lastIndex = -1;
-            while (true) {
+            const mergeDurationMs = Math.max(frameDurationMs, Math.round(sourceDuration * 1000));
+            let elapsedMs = 0;
+            for (let i = 1; i < totalFrames; i++) {
                 if (computeCancelRequested) {
                     throw new Error('导出已取消');
                 }
-
-                const ct = Math.max(0, Number(srcVideo.currentTime) || 0);
-                const normalized = durationEstimate > 0 ? Math.min(1, ct / durationEstimate) : 0;
-                const frameIndex = Math.max(0, Math.min(totalFrames - 1, Math.floor(normalized * totalFrames)));
-                if (frameIndex !== lastIndex) {
-                    paintFrameByIndex(frameIndex);
-                    lastIndex = frameIndex;
-                }
+                const delayMs = getFrameDelay(i - 1);
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                elapsedMs += delayMs;
+                paintFrameByIndex(i);
                 if (shouldShowMergeProgress) {
+                    const normalized = mergeDurationMs > 0 ? Math.min(1, elapsedMs / mergeDurationMs) : 0;
                     setComputeProgress(Math.round(normalized * 100), 100);
                 }
+            }
 
-                if (srcVideo.ended || ct >= durationEstimate - (1 / Math.max(2, streamFps))) {
-                    break;
+            const remainMs = Math.max(0, mergeDurationMs - elapsedMs);
+            if (remainMs > 0) {
+                if (shouldShowMergeProgress) {
+                    setComputeProgress(Math.round((elapsedMs / Math.max(1, mergeDurationMs)) * 100), 100);
                 }
-
-                await waitForVideoClockAdvance(srcVideo, ct, Math.max(1200, frameDelay * 4));
+                await new Promise((resolve) => setTimeout(resolve, remainMs));
             }
         } else {
             for (let i = 1; i < totalFrames; i++) {
