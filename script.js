@@ -5333,14 +5333,14 @@ async function exportVideoBlob() {
         0.01,
         getSafeVideoDuration(srcVideo, uploadInfo.videoDuration || (totalFrames / Math.max(1, uploadInfo.videoFps || 30)))
     );
-    const durationEstimate = Math.max(
-        0.01,
-        sourceDuration
-    );
     const preferredFps = Math.max(1, Math.min(60, Math.round(uploadInfo.videoFps || 30)));
-    const inferredFps = Math.round(totalFrames / durationEstimate);
-    const streamFps = Math.max(1, Math.min(60, inferredFps > 1 ? inferredFps : preferredFps));
+    const streamFps = preferredFps;
     const frameDelay = Math.max(10, Math.round(1000 / streamFps));
+    const getFrameDelay = (idx) => {
+        const item = cache.frames[idx];
+        return Math.max(10, item && item.delay ? item.delay : frameDelay);
+    };
+    const frameDurationMs = cache.frames.reduce((sum, _item, idx) => sum + getFrameDelay(idx), 0);
 
     const outputCanvas = document.createElement('canvas');
     outputCanvas.width = Math.max(1, canvas.width);
@@ -5380,6 +5380,12 @@ async function exportVideoBlob() {
         recorder.onstop = () => resolve();
     });
 
+    const useAudioClockMode = shouldMergeAudio && hasAudioTrack;
+    const durationEstimate = Math.max(
+        0.01,
+        useAudioClockMode ? sourceDuration : (frameDurationMs / 1000)
+    );
+
     const paintFrameByIndex = (index) => {
         const idx = Math.max(0, Math.min(totalFrames - 1, index));
         const item = cache.frames[idx];
@@ -5394,50 +5400,60 @@ async function exportVideoBlob() {
     await new Promise((resolve) => setTimeout(resolve, 0));
     recorder.start();
 
-    const shouldShowMergeProgress = shouldMergeAudio && hasAudioTrack;
+    const shouldShowMergeProgress = useAudioClockMode;
     if (shouldShowMergeProgress) {
         showComputeOverlay('计算中...', '正在合并音频与视频', { showFrameProgress: false });
         setComputeProgress(0, 100);
     }
 
     try {
-        try {
-            srcVideo.playbackRate = 1;
-            srcVideo.currentTime = 0;
-            await srcVideo.play();
-        } catch (_) {
-            throw new Error('导出视频失败：无法启动视频时钟');
-        }
-
-        let lastIndex = -1;
-        while (true) {
-            if (computeCancelRequested) {
-                throw new Error('导出已取消');
+        if (useAudioClockMode) {
+            try {
+                srcVideo.playbackRate = 1;
+                srcVideo.currentTime = 0;
+                await srcVideo.play();
+            } catch (_) {
+                throw new Error('导出视频失败：无法启动视频时钟');
             }
 
-            const ct = Math.max(0, Number(srcVideo.currentTime) || 0);
-            const normalized = durationEstimate > 0 ? Math.min(1, ct / durationEstimate) : 0;
-            const frameIndex = Math.max(0, Math.min(totalFrames - 1, Math.floor(normalized * totalFrames)));
-            if (frameIndex !== lastIndex) {
-                paintFrameByIndex(frameIndex);
-                lastIndex = frameIndex;
-            }
-            if (shouldShowMergeProgress) {
-                setComputeProgress(Math.round(normalized * 100), 100);
-            }
+            let lastIndex = -1;
+            while (true) {
+                if (computeCancelRequested) {
+                    throw new Error('导出已取消');
+                }
 
-            if (srcVideo.ended || ct >= durationEstimate - (1 / Math.max(2, streamFps))) {
-                break;
-            }
+                const ct = Math.max(0, Number(srcVideo.currentTime) || 0);
+                const normalized = durationEstimate > 0 ? Math.min(1, ct / durationEstimate) : 0;
+                const frameIndex = Math.max(0, Math.min(totalFrames - 1, Math.floor(normalized * totalFrames)));
+                if (frameIndex !== lastIndex) {
+                    paintFrameByIndex(frameIndex);
+                    lastIndex = frameIndex;
+                }
+                if (shouldShowMergeProgress) {
+                    setComputeProgress(Math.round(normalized * 100), 100);
+                }
 
-            await waitForVideoClockAdvance(srcVideo, ct, Math.max(1200, frameDelay * 4));
+                if (srcVideo.ended || ct >= durationEstimate - (1 / Math.max(2, streamFps))) {
+                    break;
+                }
+
+                await waitForVideoClockAdvance(srcVideo, ct, Math.max(1200, frameDelay * 4));
+            }
+        } else {
+            for (let i = 1; i < totalFrames; i++) {
+                if (computeCancelRequested) {
+                    throw new Error('导出已取消');
+                }
+                await new Promise((resolve) => setTimeout(resolve, getFrameDelay(i - 1)));
+                paintFrameByIndex(i);
+            }
         }
 
         paintFrameByIndex(totalFrames - 1);
         if (shouldShowMergeProgress) {
             setComputeProgress(100, 100);
         }
-        await new Promise((resolve) => setTimeout(resolve, Math.max(100, frameDelay)));
+        await new Promise((resolve) => setTimeout(resolve, Math.max(100, getFrameDelay(totalFrames - 1))));
     } finally {
         renderQR(false);
         if (shouldShowMergeProgress) {
