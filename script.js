@@ -1080,6 +1080,7 @@ const bgColorHexInput = document.getElementById('bg-color-hex');
 const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
+const exportAudioCb = document.getElementById('export-audio-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
 const artisticModeCb = document.getElementById('artistic-mode');
 const allowCoveredFreedomCb = document.getElementById('allow-covered-freedom');
@@ -1688,6 +1689,10 @@ function init() {
 
     if (embedImageCb) {
         embedImageCb.disabled = true;
+    }
+
+    if (exportAudioCb) {
+        exportAudioCb.checked = true;
     }
 
     if (artisticModeCb) {
@@ -5199,14 +5204,17 @@ async function exportVideoBlob() {
     const stream = outputCanvas.captureStream(streamFps);
     let audioTrack = null;
     let hasAudioTrack = false;
+    const shouldMergeAudio = !!(exportAudioCb ? exportAudioCb.checked : true);
     try {
-        const audioStream = srcVideo.captureStream ? srcVideo.captureStream() : null;
-        if (audioStream) {
-            const tracks = audioStream.getAudioTracks();
-            if (tracks && tracks.length > 0) {
-                audioTrack = tracks[0];
-                stream.addTrack(audioTrack);
-                hasAudioTrack = true;
+        if (shouldMergeAudio) {
+            const audioStream = srcVideo.captureStream ? srcVideo.captureStream() : null;
+            if (audioStream) {
+                const tracks = audioStream.getAudioTracks();
+                if (tracks && tracks.length > 0) {
+                    audioTrack = tracks[0];
+                    stream.addTrack(audioTrack);
+                    hasAudioTrack = true;
+                }
             }
         }
     } catch (err) {
@@ -5240,6 +5248,12 @@ async function exportVideoBlob() {
     await new Promise((resolve) => setTimeout(resolve, 0));
     recorder.start();
 
+    const shouldShowMergeProgress = shouldMergeAudio && hasAudioTrack;
+    if (shouldShowMergeProgress) {
+        showComputeOverlay('计算中...', '正在合并音频与视频', { showFrameProgress: false });
+        setComputeProgress(0, 100);
+    }
+
     try {
         try {
             srcVideo.playbackRate = 1;
@@ -5262,6 +5276,9 @@ async function exportVideoBlob() {
                 paintFrameByIndex(frameIndex);
                 lastIndex = frameIndex;
             }
+            if (shouldShowMergeProgress) {
+                setComputeProgress(Math.round(normalized * 100), 100);
+            }
 
             if (srcVideo.ended || ct >= durationEstimate - (1 / Math.max(2, streamFps))) {
                 break;
@@ -5271,9 +5288,15 @@ async function exportVideoBlob() {
         }
 
         paintFrameByIndex(totalFrames - 1);
+        if (shouldShowMergeProgress) {
+            setComputeProgress(100, 100);
+        }
         await new Promise((resolve) => setTimeout(resolve, Math.max(100, frameDelay)));
     } finally {
         renderQR(false);
+        if (shouldShowMergeProgress) {
+            hideComputeOverlay();
+        }
         try { srcVideo.pause(); } catch (_) {}
         try {
             if (typeof recorder.requestData === 'function' && recorder.state === 'recording') {

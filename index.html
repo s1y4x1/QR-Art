@@ -207,6 +207,11 @@
                         <span>动态预览</span>
                     </label>
                     <p class="hint option-hint">用于 GIF/APNG/视频 实时预览逐帧融合效果；仅勾选后才会执行全帧计算。</p>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-top: 6px;">
+                        <input type="checkbox" id="export-audio-cb" checked>
+                        <span>导出合并原视频音频</span>
+                    </label>
+                    <p class="hint option-hint">开启后导出 WebM 将保留原视频音频，并在最终合并阶段显示总进度。</p>
                 </div>
 
                 <input type="file" id="img-upload" accept="image/*,video/*" style="display: none">
