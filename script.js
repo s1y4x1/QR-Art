@@ -2694,54 +2694,76 @@ function drawModulePreviewPattern(pCtx, style, darkColor) {
     }
 }
 
-function drawFinderPreviewPattern(pCtx, style, darkColor) {
-    const moduleSize = 16;
-    const margin = 12;
-    const finderSize = 7 * moduleSize;
-    const alignSize = 5 * moduleSize;
-
+function drawEyePreviewPattern(pCtx, style, darkColor, moduleCount, originX, originY, moduleSize) {
     if (style === 'circle') {
         const bg = '#ffffff';
-        const fx = margin;
-        const fy = margin;
-        drawBullseye(pCtx, fx + finderSize / 2, fy + finderSize / 2, moduleSize, 7, 5, 3, darkColor, bg);
-        const ax = pCtx.canvas.width - margin - alignSize;
-        const ay = pCtx.canvas.height - margin - alignSize;
-        drawBullseye(pCtx, ax + alignSize / 2, ay + alignSize / 2, moduleSize, 5, 3, 1, darkColor, bg);
+        if (moduleCount === 7) {
+            drawBullseye(
+                pCtx,
+                originX + (moduleCount * moduleSize) / 2,
+                originY + (moduleCount * moduleSize) / 2,
+                moduleSize,
+                7,
+                5,
+                3,
+                darkColor,
+                bg
+            );
+        } else {
+            drawBullseye(
+                pCtx,
+                originX + (moduleCount * moduleSize) / 2,
+                originY + (moduleCount * moduleSize) / 2,
+                moduleSize,
+                5,
+                3,
+                1,
+                darkColor,
+                bg
+            );
+        }
         return;
     }
 
-    const pad = margin;
-    const cells = 7;
-    const cw = moduleSize;
-
-    for (let r = 0; r < cells; r++) {
-        for (let c = 0; c < cells; c++) {
-            const isFinder = (style === 'classic')
-                ? getClassicFinderBit(c, r, 7)
-                : getStyledFinderBit(style, c, r, 7);
-            if (!isFinder) continue;
-            const x = pad + c * cw;
-            const y = pad + r * cw;
-            drawStyledModuleOn(pCtx, x, y, cw, cw, 'square', darkColor);
+    for (let r = 0; r < moduleCount; r++) {
+        for (let c = 0; c < moduleCount; c++) {
+            const isDark = (style === 'classic')
+                ? getClassicFinderBit(c, r, moduleCount)
+                : getStyledFinderBit(style, c, r, moduleCount);
+            if (!isDark) continue;
+            drawStyledModuleOn(
+                pCtx,
+                originX + c * moduleSize,
+                originY + r * moduleSize,
+                moduleSize,
+                moduleSize,
+                'square',
+                darkColor
+            );
         }
     }
+}
 
-    const aPad = pCtx.canvas.width - margin - alignSize;
-    const aSize = alignSize;
-    const aCells = 5;
-    const aw = moduleSize;
-    for (let r = 0; r < aCells; r++) {
-        for (let c = 0; c < aCells; c++) {
-            const isAlign = (style === 'classic')
-                ? getClassicFinderBit(c, r, 5)
-                : getStyledFinderBit(style, c, r, 5);
-            if (!isAlign) continue;
-            const x = aPad + c * aw;
-            const y = aPad + r * aw;
-            drawStyledModuleOn(pCtx, x, y, aw, aw, 'square', darkColor);
-        }
-    }
+function drawFinderPreviewPattern(pCtx, style, darkColor) {
+    const moduleSize = 12;
+    const finderSize = 7 * moduleSize;
+    const margin = 14;
+    const positions = [
+        { x: margin, y: margin },
+        { x: pCtx.canvas.width - margin - finderSize, y: margin },
+        { x: margin, y: pCtx.canvas.height - margin - finderSize }
+    ];
+    positions.forEach((pos) => {
+        drawEyePreviewPattern(pCtx, style, darkColor, 7, pos.x, pos.y, moduleSize);
+    });
+}
+
+function drawAlignPreviewPattern(pCtx, style, darkColor) {
+    const moduleSize = 20;
+    const alignSize = 5 * moduleSize;
+    const originX = Math.floor((pCtx.canvas.width - alignSize) / 2);
+    const originY = Math.floor((pCtx.canvas.height - alignSize) / 2);
+    drawEyePreviewPattern(pCtx, style, darkColor, 5, originX, originY, moduleSize);
 }
 
 function renderStyleGallery() {
@@ -2764,8 +2786,10 @@ function renderStyleGallery() {
 
         if (target === 'module') {
             drawModulePreviewPattern(pCtx, style, '#111111');
-        } else if (target === 'finder' || target === 'align') {
+        } else if (target === 'finder') {
             drawFinderPreviewPattern(pCtx, style, '#111111');
+        } else if (target === 'align') {
+            drawAlignPreviewPattern(pCtx, style, '#111111');
         }
     });
 }
