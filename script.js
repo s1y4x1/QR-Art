@@ -5174,6 +5174,111 @@ function pickWebmRecorderMimeType(hasAudioTrack = true) {
     return '';
 }
 
+function readEbmlVint(bytes, offset, forId = false) {
+    if (!bytes || offset < 0 || offset >= bytes.length) return null;
+    const first = bytes[offset];
+    if (!first) return null;
+    let mask = 0x80;
+    let len = 1;
+    while (len <= 8 && (first & mask) === 0) {
+        mask >>= 1;
+        len += 1;
+    }
+    if (len > 8 || offset + len > bytes.length) return null;
+
+    let value = 0;
+    if (forId) {
+        for (let i = 0; i < len; i++) {
+            value = (value * 256) + bytes[offset + i];
+        }
+    } else {
+        value = first & (mask - 1);
+        for (let i = 1; i < len; i++) {
+            value = (value * 256) + bytes[offset + i];
+        }
+        const unknownValue = (Math.pow(2, 7 * len) - 1);
+        if (value === unknownValue) value = -1;
+    }
+
+    return { length: len, value };
+}
+
+function readUintBigEndian(bytes, offset, length) {
+    let value = 0;
+    for (let i = 0; i < length; i++) {
+        value = (value * 256) + bytes[offset + i];
+    }
+    return value;
+}
+
+function findEbmlElement(bytes, start, end, targetId) {
+    let pos = Math.max(0, start || 0);
+    const limit = Math.min(bytes.length, end || bytes.length);
+    while (pos < limit) {
+        const idInfo = readEbmlVint(bytes, pos, true);
+        if (!idInfo) break;
+        const sizeInfo = readEbmlVint(bytes, pos + idInfo.length, false);
+        if (!sizeInfo) break;
+
+        const dataStart = pos + idInfo.length + sizeInfo.length;
+        const dataEnd = sizeInfo.value < 0 ? limit : Math.min(limit, dataStart + sizeInfo.value);
+        if (dataStart > limit || dataEnd < dataStart) break;
+
+        if (idInfo.value === targetId) {
+            return {
+                id: idInfo.value,
+                start: pos,
+                headerSize: idInfo.length + sizeInfo.length,
+                dataStart,
+                dataEnd,
+                size: dataEnd - dataStart
+            };
+        }
+
+        if (dataEnd === pos) break;
+        pos = dataEnd;
+    }
+    return null;
+}
+
+async function patchWebmDurationMetadata(blob, durationSec) {
+    if (!blob || !(durationSec > 0)) return blob;
+    try {
+        const buffer = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const segment = findEbmlElement(bytes, 0, bytes.length, 0x18538067);
+        if (!segment) return blob;
+
+        const info = findEbmlElement(bytes, segment.dataStart, segment.dataEnd, 0x1549A966);
+        if (!info) return blob;
+
+        const durationElem = findEbmlElement(bytes, info.dataStart, info.dataEnd, 0x4489);
+        if (!durationElem || (durationElem.size !== 4 && durationElem.size !== 8)) return blob;
+
+        const scaleElem = findEbmlElement(bytes, info.dataStart, info.dataEnd, 0x2AD7B1);
+        let timecodeScaleNs = 1000000;
+        if (scaleElem && scaleElem.size > 0 && scaleElem.size <= 8) {
+            const rawScale = readUintBigEndian(bytes, scaleElem.dataStart, scaleElem.size);
+            if (Number.isFinite(rawScale) && rawScale > 0) {
+                timecodeScaleNs = rawScale;
+            }
+        }
+
+        const durationValue = (durationSec * 1e9) / timecodeScaleNs;
+        const view = new DataView(buffer);
+        if (durationElem.size === 4) {
+            view.setFloat32(durationElem.dataStart, durationValue, false);
+        } else {
+            view.setFloat64(durationElem.dataStart, durationValue, false);
+        }
+
+        return new Blob([buffer], { type: blob.type || 'video/webm' });
+    } catch (err) {
+        console.warn('WebM 时长元数据修复失败，返回原始导出文件:', err);
+        return blob;
+    }
+}
+
 async function exportVideoBlob() {
     if (!uploadInfo || !uploadInfo.isVideo || !uploadInfo.videoObjectUrl) {
         return await exportStaticBlob('image/png');
@@ -5343,7 +5448,8 @@ async function exportVideoBlob() {
     if (!chunks.length) {
         throw new Error('导出视频失败：未生成帧数据');
     }
-    return new Blob(chunks, { type: blobType });
+    const rawBlob = new Blob(chunks, { type: blobType });
+    return await patchWebmDurationMetadata(rawBlob, durationEstimate);
 }
 
 async function handleImageUpload(e) {
