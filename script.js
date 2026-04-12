@@ -5451,7 +5451,7 @@ async function exportVideoBlob() {
     const shouldShowMergeProgress = useAudioClockMode;
     if (shouldShowMergeProgress) {
         showComputeOverlay('计算中...', '正在合并音频与视频', { showFrameProgress: false });
-        setComputeProgress(0, 100);
+        setComputeProgress(0, totalFrames);
     }
 
     try {
@@ -5475,17 +5475,36 @@ async function exportVideoBlob() {
                 elapsedMs += delayMs;
                 paintFrameByIndex(i);
                 if (shouldShowMergeProgress) {
-                    const normalized = mergeDurationMs > 0 ? Math.min(1, elapsedMs / mergeDurationMs) : 0;
-                    setComputeProgress(Math.round(normalized * 100), 100);
+                    const realRemainSec = Math.max(0, sourceDuration - Math.max(0, Number(srcVideo.currentTime) || 0));
+                    setComputeProgress(i, totalFrames);
+                    if (computeProgressText) {
+                        const pct = Math.round((Math.max(0, Math.min(totalFrames, i)) / Math.max(1, totalFrames)) * 100);
+                        computeProgressText.textContent = `${pct}% (${i}/${totalFrames}) · 预计剩余 ${formatDurationHMS(realRemainSec)}`;
+                    }
                 }
             }
 
             const remainMs = Math.max(0, mergeDurationMs - elapsedMs);
             if (remainMs > 0) {
                 if (shouldShowMergeProgress) {
-                    setComputeProgress(Math.round((elapsedMs / Math.max(1, mergeDurationMs)) * 100), 100);
+                    if (computeSubtitle) computeSubtitle.textContent = '正在等待音频收尾';
                 }
-                await new Promise((resolve) => setTimeout(resolve, remainMs));
+                const waitStart = performance.now();
+                while (true) {
+                    if (computeCancelRequested) {
+                        throw new Error('导出已取消');
+                    }
+                    const wallRemainSec = Math.max(0, (remainMs - (performance.now() - waitStart)) / 1000);
+                    const videoRemainSec = Math.max(0, sourceDuration - Math.max(0, Number(srcVideo.currentTime) || 0));
+                    const showRemainSec = Math.max(videoRemainSec, wallRemainSec);
+                    if (shouldShowMergeProgress && computeProgressText) {
+                        computeProgressText.textContent = `100% (${totalFrames}/${totalFrames}) · 预计剩余 ${formatDurationHMS(showRemainSec)}`;
+                    }
+                    if (showRemainSec <= 0.05 || srcVideo.ended) {
+                        break;
+                    }
+                    await waitForVideoClockAdvance(srcVideo, Math.max(0, Number(srcVideo.currentTime) || 0), 1200);
+                }
             }
         } else {
             for (let i = 1; i < totalFrames; i++) {
@@ -5499,7 +5518,7 @@ async function exportVideoBlob() {
 
         paintFrameByIndex(totalFrames - 1);
         if (shouldShowMergeProgress) {
-            setComputeProgress(100, 100);
+            setComputeProgress(totalFrames, totalFrames);
         }
         await new Promise((resolve) => setTimeout(resolve, Math.max(100, getFrameDelay(totalFrames - 1))));
     } finally {
