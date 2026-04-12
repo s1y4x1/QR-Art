@@ -3321,18 +3321,17 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         const row = allTargetRows[bi];
         const primaryFreedoms = (mutableByBlock.get(row) || []);
         const coveredFreedoms = (coveredMutableByBlock.get(row) || []);
-        let freedoms = primaryFreedoms.slice();
+        let freedoms = [...new Set(primaryFreedoms)];
+        const extraCoveredFreedoms = [...new Set(coveredFreedoms)].filter((g) => !freedoms.includes(g));
         const targets = (ecTargetsByBlock.get(row) || []);
         if (!targets.length) continue;
         totalTargets += targets.length;
         const allowCoveredFreedom = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
-        if (allowCoveredFreedom && coveredFreedoms.length > 0) {
-            const existing = new Set(freedoms);
-            const supplement = coveredFreedoms.filter((g) => !existing.has(g));
-            coveredFreedomUsed += supplement.length;
-            freedoms = freedoms.concat(supplement);
+        totalFreedoms += freedoms.length + (allowCoveredFreedom ? extraCoveredFreedoms.length : 0);
+        if (!freedoms.length && allowCoveredFreedom && extraCoveredFreedoms.length) {
+            freedoms = extraCoveredFreedoms.slice();
+            coveredFreedomUsed += freedoms.length;
         }
-        totalFreedoms += freedoms.length;
         if (!freedoms.length) {
             blocksNoFreedom += 1;
             remainingMismatch += targets.length;
@@ -3447,6 +3446,37 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
 
         // Final precise check against fully rebuilt QR state.
         bestMismatch = evalMismatchFromBits(evalQrBits(work));
+
+        if (allowCoveredFreedom && extraCoveredFreedoms.length > 0 && bestMismatch > 0) {
+            let usedCoveredInRow = 0;
+            for (let pass = 0; pass < 2 && bestMismatch > 0; pass++) {
+                let improved = false;
+                for (let i = 0; i < extraCoveredFreedoms.length; i++) {
+                    if (isCanceled()) return { canceled: true };
+                    const g = extraCoveredFreedoms[i];
+                    const bIdx = Math.floor(g / 8);
+                    const bitPos = 7 - (g % 8);
+                    if (bIdx < 0 || bIdx >= work.length) continue;
+
+                    work[bIdx] ^= (1 << bitPos);
+                    const nowMismatch = evalMismatchFromBits(evalQrBits(work));
+                    if (nowMismatch <= bestMismatch) {
+                        if (nowMismatch < bestMismatch) improved = true;
+                        bestMismatch = nowMismatch;
+                        usedCoveredInRow += 1;
+                    } else {
+                        work[bIdx] ^= (1 << bitPos);
+                    }
+
+                    if ((i & 31) === 31) {
+                        await new Promise((resolve) => setTimeout(resolve, 0));
+                    }
+                    if (bestMismatch <= 0) break;
+                }
+                if (!improved) break;
+            }
+            coveredFreedomUsed += usedCoveredInRow;
+        }
 
         remainingMismatch += bestMismatch;
 
