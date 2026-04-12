@@ -621,9 +621,8 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     uploadInfo.videoDuration = duration;
     const totalFrames = Math.max(1, Math.floor(duration * fps));
     const delay = Math.max(10, Math.round(1000 / fps));
-    const allowCovered = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
     const shouldShowProgress = forExport ? true : (artisticOn && totalFrames > 20);
-    const showFrameProgress = forExport ? allowCovered : (artisticOn && totalFrames > 20);
+    const showFrameProgress = forExport ? artisticOn : (artisticOn && totalFrames > 20);
 
     const frameCanvas = document.createElement('canvas');
     frameCanvas.width = width;
@@ -3044,8 +3043,8 @@ function setComputeProgress(done, total) {
     }
 
     const frameMode = !!(computeFrameProgressGroup && computeFrameProgressGroup.style.display !== 'none');
-    const shownDone = frameMode ? Math.min(t, Math.floor(d)) : d;
-    const shownTotal = frameMode ? Math.floor(t) : t;
+    const shownDone = frameMode ? Math.min(t, Math.floor(d)) : Math.round(d);
+    const shownTotal = frameMode ? Math.floor(t) : Math.round(t);
     computeProgressText.textContent = `${pct}% (${formatProgressCount(shownDone)}/${formatProgressCount(shownTotal)}) · 预计剩余 ${etaText}`;
 }
 
