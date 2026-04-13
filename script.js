@@ -162,19 +162,27 @@ function cleanupVideoObjectUrl() {
     }
 }
 
-function seekVideo(video, timeSec) {
+function seekVideo(video, timeSec, timeoutMs = 2500) {
     return new Promise((resolve, reject) => {
         if (!video) {
             reject(new Error('video is null'));
             return;
         }
-        const onSeeked = () => {
+        let settled = false;
+        let timer = null;
+        const done = (ok, err) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
             cleanup();
-            resolve();
+            if (ok) resolve();
+            else reject(err || new Error('video seek failed'));
+        };
+        const onSeeked = () => {
+            done(true);
         };
         const onError = () => {
-            cleanup();
-            reject(new Error('video seek failed'));
+            done(false, new Error('video seek failed'));
         };
         const cleanup = () => {
             video.removeEventListener('seeked', onSeeked);
@@ -184,7 +192,16 @@ function seekVideo(video, timeSec) {
         video.addEventListener('error', onError, { once: true });
         const safeDuration = getSafeVideoDuration(video, 0);
         const maxTime = safeDuration > 0 ? Math.max(0, safeDuration - 0.001) : Math.max(0, Number(timeSec) || 0);
-        video.currentTime = Math.max(0, Math.min(Number(timeSec) || 0, maxTime));
+        const targetTime = Math.max(0, Math.min(Number(timeSec) || 0, maxTime));
+        if (Math.abs((Number(video.currentTime) || 0) - targetTime) < 0.0005) {
+            done(true);
+            return;
+        }
+        timer = setTimeout(() => {
+            // 某些浏览器后台时 seeked 事件会被延迟/丢失，超时后继续流程避免卡死。
+            done(true);
+        }, Math.max(500, timeoutMs || 2500));
+        video.currentTime = targetTime;
     });
 }
 
@@ -5490,20 +5507,35 @@ async function exportVideoBlob() {
                     if (computeSubtitle) computeSubtitle.textContent = '正在等待音频收尾';
                 }
                 const waitStart = performance.now();
+                let stagnantClockCount = 0;
+                let lastClock = Math.max(0, Number(srcVideo.currentTime) || 0);
                 while (true) {
                     if (computeCancelRequested) {
                         throw new Error('导出已取消');
                     }
                     const wallRemainSec = Math.max(0, (remainMs - (performance.now() - waitStart)) / 1000);
-                    const videoRemainSec = Math.max(0, sourceDuration - Math.max(0, Number(srcVideo.currentTime) || 0));
-                    const showRemainSec = Math.max(videoRemainSec, wallRemainSec);
+                    const nowClock = Math.max(0, Number(srcVideo.currentTime) || 0);
+                    const videoRemainSec = Math.max(0, sourceDuration - nowClock);
+                    if (nowClock <= lastClock + 0.0005) {
+                        stagnantClockCount += 1;
+                    } else {
+                        stagnantClockCount = 0;
+                    }
+                    lastClock = Math.max(lastClock, nowClock);
+
+                    const forceWallClock = stagnantClockCount >= 3 || (typeof document !== 'undefined' && !!document.hidden);
+                    const showRemainSec = forceWallClock ? wallRemainSec : Math.max(videoRemainSec, wallRemainSec);
                     if (shouldShowMergeProgress && computeProgressText) {
                         computeProgressText.textContent = `100% (${totalFrames}/${totalFrames}) · 预计剩余 ${formatDurationHMS(showRemainSec)}`;
                     }
                     if (showRemainSec <= 0.05 || srcVideo.ended) {
                         break;
                     }
-                    await waitForVideoClockAdvance(srcVideo, Math.max(0, Number(srcVideo.currentTime) || 0), 1200);
+                    if (forceWallClock) {
+                        await new Promise((resolve) => setTimeout(resolve, 250));
+                    } else {
+                        await waitForVideoClockAdvance(srcVideo, nowClock, 1200);
+                    }
                 }
             }
         } else {
