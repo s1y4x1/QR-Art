@@ -290,6 +290,37 @@ function waitForVideoClockAdvance(video, previousTimeSec, timeoutMs = 5000) {
     });
 }
 
+function waitForVideoDataReady(video, timeoutMs = 2000) {
+    return new Promise((resolve) => {
+        if (!video) {
+            resolve();
+            return;
+        }
+        if ((video.readyState || 0) >= 2) {
+            resolve();
+            return;
+        }
+
+        let settled = false;
+        let timer = null;
+        const done = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve();
+        };
+        const cleanup = () => {
+            video.removeEventListener('loadeddata', done);
+            video.removeEventListener('canplay', done);
+            if (timer) clearTimeout(timer);
+        };
+
+        video.addEventListener('loadeddata', done, { once: true });
+        video.addEventListener('canplay', done, { once: true });
+        timer = setTimeout(done, Math.max(500, timeoutMs || 2000));
+    });
+}
+
 async function extractVideoFirstFrame(video) {
     const width = video.videoWidth || 0;
     const height = video.videoHeight || 0;
@@ -298,8 +329,24 @@ async function extractVideoFirstFrame(video) {
     firstCanvas.width = width;
     firstCanvas.height = height;
     const fctx = firstCanvas.getContext('2d', { willReadFrequently: true });
-    await seekVideo(video, 0);
+
+    await waitForVideoDataReady(video, 2200);
+    await seekVideo(video, 0, 3000);
+    await waitNextVideoFrame(video, 1000);
+    fctx.clearRect(0, 0, width, height);
     fctx.drawImage(video, 0, 0, width, height);
+
+    const p = fctx.getImageData(0, 0, 1, 1).data;
+    if (p[3] <= 1) {
+        const probeTime = Math.min(0.04, Math.max(0, getSafeVideoDuration(video, 0) - 0.001));
+        await seekVideo(video, probeTime, 1200);
+        await waitNextVideoFrame(video, 800);
+        await seekVideo(video, 0, 1200);
+        await waitNextVideoFrame(video, 800);
+        fctx.clearRect(0, 0, width, height);
+        fctx.drawImage(video, 0, 0, width, height);
+    }
+
     return firstCanvas.toDataURL('image/png');
 }
 
