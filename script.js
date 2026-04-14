@@ -5386,13 +5386,18 @@ async function exportVideoBlob() {
         srcVideo.addEventListener('error', onError, { once: true });
     });
 
-    const cache = await processVideoFramesForPreview('正在逐帧计算导出内容', {
-        forExport: true,
-        artisticOn: !!(artisticModeCb && artisticModeCb.checked)
-    });
-    if (!cache || !cache.frames || !cache.frames.length) {
-        throw new Error('导出已取消');
-    }
+    const previousCanvasVisibility = canvas.style.visibility;
+    canvas.style.visibility = 'hidden';
+
+    try {
+
+        const cache = await processVideoFramesForPreview('正在逐帧计算导出内容', {
+            forExport: true,
+            artisticOn: !!(artisticModeCb && artisticModeCb.checked)
+        });
+        if (!cache || !cache.frames || !cache.frames.length) {
+            throw new Error('导出已取消');
+        }
     const totalFrames = cache.frames.length;
     const sourceDuration = Math.max(
         0.01,
@@ -5570,8 +5575,11 @@ async function exportVideoBlob() {
     if (!chunks.length) {
         throw new Error('导出视频失败：未生成帧数据');
     }
-    const rawBlob = new Blob(chunks, { type: blobType });
-    return await patchWebmDurationMetadata(rawBlob, durationEstimate);
+        const rawBlob = new Blob(chunks, { type: blobType });
+        return await patchWebmDurationMetadata(rawBlob, durationEstimate);
+    } finally {
+        canvas.style.visibility = previousCanvasVisibility;
+    }
 }
 
 async function handleImageUpload(e) {
@@ -5639,9 +5647,6 @@ async function handleImageUpload(e) {
 
             const firstFrameUrl = await extractVideoFirstFrame(video);
             uploadInfo.firstFrameUrl = firstFrameUrl;
-            if (firstFrameUrl) {
-                previewImg.src = firstFrameUrl;
-            }
         } catch (err) {
             console.warn('视频解析失败:', err);
             alert('浏览器无法解析该视频，请更换为可播放格式。');
@@ -5750,6 +5755,11 @@ async function handleImageUpload(e) {
         previewImg.src = objectUrl;
     } else {
         setStaticGifPreview();
+        if (previewImg.onload && previewImg.complete && ((previewImg.naturalWidth || previewImg.width || 0) > 0)) {
+            const onloadHandler = previewImg.onload;
+            previewImg.onload = null;
+            onloadHandler.call(previewImg);
+        }
     }
     e.target.value = ''; // Reset input
 }
