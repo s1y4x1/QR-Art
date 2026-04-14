@@ -358,6 +358,15 @@ async function extractVideoFirstFrame(video) {
     return firstCanvas.toDataURL('image/png');
 }
 
+function loadImageFromUrl(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('image load failed'));
+        img.src = src;
+    });
+}
+
 async function processSingleFrameCanvas(frameCanvas, isExport = false) {
     const prevBytes = [...currentSuffixBytes];
     if (lastWhitenMode === 'white') {
@@ -700,6 +709,14 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
     frameCanvas.width = width;
     frameCanvas.height = height;
     const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+    let firstFrameImage = null;
+    if (uploadInfo && uploadInfo.firstFrameUrl) {
+        try {
+            firstFrameImage = await loadImageFromUrl(uploadInfo.firstFrameUrl);
+        } catch (_) {
+            firstFrameImage = null;
+        }
+    }
 
     const frames = [];
     const originalBytes = [...currentSuffixBytes];
@@ -726,14 +743,20 @@ async function processVideoFramesForPreview(reason = '正在处理视频帧', op
                 }
             }
 
-            const targetTime = Math.min(Math.max(0, duration - frameEpsilon), i / fps);
-            await seekVideo(video, targetTime);
+            let capturedTime = 0;
+            if (i === 0 && firstFrameImage) {
+                fctx.clearRect(0, 0, width, height);
+                fctx.drawImage(firstFrameImage, 0, 0, width, height);
+                capturedTime = 0;
+            } else {
+                const targetTime = Math.min(Math.max(0, duration - frameEpsilon), i / fps);
+                await seekVideo(video, targetTime);
 
-            if (computeCancelRequested) return null;
-            fctx.clearRect(0, 0, width, height);
-            fctx.drawImage(video, 0, 0, width, height);
-
-            const capturedTime = Math.min(duration, Math.max(0, Number(video.currentTime) || targetTime));
+                if (computeCancelRequested) return null;
+                fctx.clearRect(0, 0, width, height);
+                fctx.drawImage(video, 0, 0, width, height);
+                capturedTime = Math.min(duration, Math.max(0, Number(video.currentTime) || targetTime));
+            }
 
             if (artisticOn) {
                 animatedFrameProgressContext = { frameIndex: i, totalFrames };
