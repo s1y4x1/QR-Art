@@ -5481,61 +5481,59 @@ async function exportVideoBlob() {
                 throw new Error('导出视频失败：无法启动视频时钟');
             }
 
-            const mergeDurationMs = Math.max(frameDurationMs, Math.round(sourceDuration * 1000));
-            let elapsedMs = 0;
-            for (let i = 1; i < totalFrames; i++) {
+            let lastIndex = 0;
+            let stagnantClockCount = 0;
+            let lastClock = Math.max(0, Number(srcVideo.currentTime) || 0);
+            const wallStart = performance.now();
+
+            while (true) {
                 if (computeCancelRequested) {
                     throw new Error('导出已取消');
                 }
-                const delayMs = getFrameDelay(i - 1);
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
-                elapsedMs += delayMs;
-                paintFrameByIndex(i);
-                if (shouldShowMergeProgress) {
-                    const realRemainSec = Math.max(0, sourceDuration - Math.max(0, Number(srcVideo.currentTime) || 0));
-                    setComputeProgress(i, totalFrames);
-                    if (computeProgressText) {
-                        const pct = Math.round((Math.max(0, Math.min(totalFrames, i)) / Math.max(1, totalFrames)) * 100);
-                        computeProgressText.textContent = `${pct}% (${i}/${totalFrames}) · 预计剩余 ${formatDurationHMS(realRemainSec)}`;
-                    }
-                }
-            }
 
-            const remainMs = Math.max(0, mergeDurationMs - elapsedMs);
-            if (remainMs > 0) {
-                if (shouldShowMergeProgress) {
-                    if (computeSubtitle) computeSubtitle.textContent = '正在等待音频收尾';
+                const nowClock = Math.max(0, Number(srcVideo.currentTime) || 0);
+                if (nowClock <= lastClock + 0.0005) {
+                    stagnantClockCount += 1;
+                } else {
+                    stagnantClockCount = 0;
                 }
-                const waitStart = performance.now();
-                let stagnantClockCount = 0;
-                let lastClock = Math.max(0, Number(srcVideo.currentTime) || 0);
-                while (true) {
-                    if (computeCancelRequested) {
-                        throw new Error('导出已取消');
-                    }
-                    const wallRemainSec = Math.max(0, (remainMs - (performance.now() - waitStart)) / 1000);
-                    const nowClock = Math.max(0, Number(srcVideo.currentTime) || 0);
+                const forceWallClock = stagnantClockCount >= 3 || (typeof document !== 'undefined' && !!document.hidden);
+
+                let normalized = 0;
+                if (forceWallClock) {
+                    normalized = Math.min(1, Math.max(0, (performance.now() - wallStart) / Math.max(1, durationEstimate * 1000)));
+                } else {
+                    normalized = durationEstimate > 0 ? Math.min(1, nowClock / durationEstimate) : 0;
+                }
+
+                const frameIndex = Math.max(0, Math.min(totalFrames - 1, Math.floor(normalized * totalFrames)));
+                if (frameIndex !== lastIndex) {
+                    paintFrameByIndex(frameIndex);
+                    lastIndex = frameIndex;
+                }
+
+                if (shouldShowMergeProgress) {
+                    const wallRemainSec = Math.max(0, durationEstimate - ((performance.now() - wallStart) / 1000));
                     const videoRemainSec = Math.max(0, sourceDuration - nowClock);
-                    if (nowClock <= lastClock + 0.0005) {
-                        stagnantClockCount += 1;
-                    } else {
-                        stagnantClockCount = 0;
+                    const remainSec = forceWallClock ? wallRemainSec : videoRemainSec;
+                    setComputeProgress(frameIndex, totalFrames);
+                    if (computeProgressText) {
+                        const pct = Math.round((Math.max(0, Math.min(totalFrames, frameIndex)) / Math.max(1, totalFrames)) * 100);
+                        computeProgressText.textContent = `${pct}% (${frameIndex}/${totalFrames}) · 预计剩余 ${formatDurationHMS(remainSec)}`;
                     }
-                    lastClock = Math.max(lastClock, nowClock);
+                }
 
-                    const forceWallClock = stagnantClockCount >= 3 || (typeof document !== 'undefined' && !!document.hidden);
-                    const showRemainSec = forceWallClock ? wallRemainSec : Math.max(videoRemainSec, wallRemainSec);
-                    if (shouldShowMergeProgress && computeProgressText) {
-                        computeProgressText.textContent = `100% (${totalFrames}/${totalFrames}) · 预计剩余 ${formatDurationHMS(showRemainSec)}`;
-                    }
-                    if (showRemainSec <= 0.05 || srcVideo.ended) {
-                        break;
-                    }
-                    if (forceWallClock) {
-                        await new Promise((resolve) => setTimeout(resolve, 250));
-                    } else {
-                        await waitForVideoClockAdvance(srcVideo, nowClock, 1200);
-                    }
+                lastClock = Math.max(lastClock, nowClock);
+                const finishedByClock = !forceWallClock && (srcVideo.ended || nowClock >= sourceDuration - 0.03);
+                const finishedByWall = forceWallClock && ((performance.now() - wallStart) >= (durationEstimate * 1000 - 30));
+                if (finishedByClock || finishedByWall) {
+                    break;
+                }
+
+                if (forceWallClock) {
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                } else {
+                    await waitForVideoClockAdvance(srcVideo, nowClock, 1200);
                 }
             }
         } else {
