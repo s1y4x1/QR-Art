@@ -290,6 +290,14 @@ function waitForVideoClockAdvance(video, previousTimeSec, timeoutMs = 5000) {
     });
 }
 
+async function cooperativeYield() {
+    if (typeof document !== 'undefined' && !!document.hidden) {
+        await Promise.resolve();
+        return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function waitForVideoDataReady(video, timeoutMs = 2000) {
     return new Promise((resolve) => {
         if (!video) {
@@ -3445,7 +3453,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
             }
 
             if ((j & 31) === 31) {
-                await new Promise((resolve) => setTimeout(resolve, 0));
+                await cooperativeYield();
             }
         }
         if (onProgress) onProgress(bi * 3 + 1, totalProgressSteps);
@@ -3500,7 +3508,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
                 bestMismatch += delta;
                 improvedThisPass = true;
                 if ((j & 63) === 63) {
-                    await new Promise((resolve) => setTimeout(resolve, 0));
+                    await cooperativeYield();
                 }
                 if (bestMismatch <= 0) break;
             }
@@ -3532,7 +3540,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
                     }
 
                     if ((i & 31) === 31) {
-                        await new Promise((resolve) => setTimeout(resolve, 0));
+                        await cooperativeYield();
                     }
                     if (bestMismatch <= 0) break;
                 }
@@ -3545,7 +3553,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
 
         if (onProgress) onProgress(bi * 3 + 3, totalProgressSteps);
         if ((bi & 1) === 1) {
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await cooperativeYield();
         }
     }
 
