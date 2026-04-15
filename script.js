@@ -2447,27 +2447,11 @@ function init() {
     canvas.addEventListener('mousemove', (e) => {
         if (isDragging) drawAt(e);
     });
-    canvas.addEventListener('mouseup', () => {
-        if (isDragging) {
-            isDragging = false;
-            if (pendingDrawRecompute) {
-                const artOn = !!(artisticModeCb && artisticModeCb.checked);
-                updateQR({ skipArtisticPass: !artOn });
-                pendingDrawRecompute = false;
-            }
-            saveHistory();
-        }
+    canvas.addEventListener('mouseup', async () => {
+        await finishDrawStroke();
     });
-    canvas.addEventListener('mouseleave', () => {
-        if (isDragging) {
-            isDragging = false;
-            if (pendingDrawRecompute) {
-                const artOn = !!(artisticModeCb && artisticModeCb.checked);
-                updateQR({ skipArtisticPass: !artOn });
-                pendingDrawRecompute = false;
-            }
-            saveHistory();
-        }
+    canvas.addEventListener('mouseleave', async () => {
+        await finishDrawStroke();
     });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     
@@ -4902,6 +4886,18 @@ function drawAt(e) {
     }
 }
 
+async function finishDrawStroke() {
+    if (!isDragging) return;
+    isDragging = false;
+    if (pendingDrawRecompute) {
+        const artOn = !!(artisticModeCb && artisticModeCb.checked);
+        await updateQR({ skipArtisticPass: !artOn });
+        pendingDrawRecompute = false;
+    }
+    drawnPixels.clear();
+    saveHistory();
+}
+
 function plotLine(r0, c0, r1, c1, color) {
     let dx = Math.abs(c1 - c0);
     let dy = Math.abs(r1 - r0);
@@ -4954,6 +4950,7 @@ function modifyPixel(r, c, targetColor) {
 
     if (reqBit) currentSuffixBytes[bIdx] |= (1<<bitPos);
     else currentSuffixBytes[bIdx] &= ~(1<<bitPos);
+    drawnPixels.set(`${r},${c}`, targetColor);
     return true;
 }
 
