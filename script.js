@@ -814,6 +814,7 @@ function getAnimatedArtCacheKey() {
         bg: backgroundColor,
         art: !!(artisticModeCb && artisticModeCb.checked),
         covered: !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked),
+        emphasizeFunc: !!(emphasizeFuncCb ? emphasizeFuncCb.checked : true),
         basis: isImageBasisMode(),
         importActive: !!importState.active,
         importW: precise(importState.width),
@@ -1174,6 +1175,7 @@ const bgColorHexInput = document.getElementById('bg-color-hex');
 const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
+const emphasizeFuncCb = document.getElementById('emphasize-func-cb');
 const invertToneCb = document.getElementById('invert-tone-cb');
 const exportAudioCb = document.getElementById('export-audio-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
@@ -1789,6 +1791,15 @@ function init() {
         embedImageCb.disabled = true;
     }
 
+    if (emphasizeFuncCb) {
+        emphasizeFuncCb.checked = true;
+        emphasizeFuncCb.disabled = true;
+        emphasizeFuncCb.addEventListener('change', () => {
+            invalidateAnimatedArtCache();
+            renderQR(false);
+        });
+    }
+
     if (invertToneCb) {
         invertToneCb.checked = false;
         invertToneCb.disabled = true;
@@ -2237,6 +2248,10 @@ function init() {
              if (allowCoveredFreedomCb) {
                  allowCoveredFreedomCb.checked = false;
                  allowCoveredFreedomCb.disabled = true;
+             }
+             if (emphasizeFuncCb) {
+                 emphasizeFuncCb.checked = true;
+                 emphasizeFuncCb.disabled = true;
              }
              if (invertToneCb) {
                  invertToneCb.checked = false;
@@ -4392,6 +4407,7 @@ function renderQR(isExport, imageOverride) {
     const bgColor = backgroundColor || '#ffffff';
     const embedImage = document.getElementById('embed-image-cb') && document.getElementById('embed-image-cb').checked;
     const artisticMode = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
+    const emphasizeFunctionRegions = !!(emphasizeFuncCb ? emphasizeFuncCb.checked : true);
 
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -4507,6 +4523,9 @@ function renderQR(isExport, imageOverride) {
             let isDark = generatedQR.isDark(r, c);
             const cell = pixelMap[r] ? pixelMap[r][c] : null;
             const showUnmasked = (maskPattern === -2);
+            const isFinder = isFinderCell(r, c, count);
+            const isAlign = !!getAlignLocalCoord(r, c, count);
+            const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeFunctionRegions);
 
             if (showUnmasked && cell && (cell.type === 'data' || cell.type === 'ec')) {
                 isDark = isDark ^ (cell.maskVal === 1);
@@ -4514,9 +4533,7 @@ function renderQR(isExport, imageOverride) {
 
             const x = qrOriginX + (c + qrMargin) * moduleW;
             const y = qrOriginY + (r + qrMargin) * moduleH;
-            const isFinder = isFinderCell(r, c, count);
-            const isAlign = !!getAlignLocalCoord(r, c, count);
-            const activeStyle = isFinder ? finderStyle : (isAlign ? alignStyle : moduleStyle);
+            const activeStyle = functionLikeData ? moduleStyle : (isFinder ? finderStyle : (isAlign ? alignStyle : moduleStyle));
 
             if (drawnPixels.has(`${r},${c}`)) {
                 const val = drawnPixels.get(`${r},${c}`);
@@ -4524,7 +4541,7 @@ function renderQR(isExport, imageOverride) {
                 if (val === 0) isDark = false;
             }
 
-            if (cell && cell.type === 'func' && (isFinder || isAlign)) {
+            if (!functionLikeData && cell && cell.type === 'func' && (isFinder || isAlign)) {
                 const eyeStyle = isFinder ? finderStyle : alignStyle;
                 const override = getFinderAlignOverride(eyeStyle, r, c, count);
                 if (override !== null) isDark = override;
@@ -4538,13 +4555,15 @@ function renderQR(isExport, imageOverride) {
     for (let r = 0; r < count; r++) {
         for (let c = 0; c < count; c++) {
             const cell = pixelMap[r] ? pixelMap[r][c] : null;
-            const isDark = finalDark[r][c];
+            let isDark = finalDark[r][c];
             const activeStyle = finalStyle[r][c];
             const x = qrOriginX + (c + qrMargin) * moduleW;
             const y = qrOriginY + (r + qrMargin) * moduleH;
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
+            const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeFunctionRegions);
             const deferCircleFinder = (
+                !functionLikeData &&
                 activeStyle === 'circle' &&
                 cell &&
                 cell.type === 'func' &&
@@ -4578,13 +4597,17 @@ function renderQR(isExport, imageOverride) {
             }
 
             const covered = coverRatio > 0;
-            const auroraCoveredTransparent = !!(cell && cell.type === 'func' && (isFinder || isAlign) && activeStyle === 'aurora' && covered);
-            if (auroraCoveredTransparent) {
-                continue;
+            if (!functionLikeData && cell && cell.type === 'func' && (isFinder || isAlign) && activeStyle === 'aurora' && covered) {
+                const local = isFinder ? getFinderLocalCoord(r, c, count) : getAlignLocalCoord(r, c, count);
+                const size = isFinder ? 7 : 5;
+                if (!local || !isAuroraCrossBit(local.x, local.y, size)) {
+                    continue;
+                }
+                isDark = !isAuroraWhiteNotch(local.x, local.y, size);
             }
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
-            const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
+            const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec' || functionLikeData);
             const isProtectedOverlayCell = !!(cell && (cell.type === 'ec' || (cell.type === 'data' && !isEditableDataCell(cell))));
             if (useGhost) {
                 const smallSize = Math.min(moduleW, moduleH) / 2;
@@ -4675,7 +4698,7 @@ function renderQR(isExport, imageOverride) {
             }
 
             if (!isExport && cell) {
-                if (cell.type === 'func') {
+                if (cell.type === 'func' && emphasizeFunctionRegions) {
                     ctx.fillStyle = 'rgba(128, 128, 128, 0.4)';
                     ctx.fillRect(x, y, moduleW, moduleH);
                 } else if (cell.type === 'ec') {
@@ -4689,7 +4712,7 @@ function renderQR(isExport, imageOverride) {
         }
     }
 
-    if (finderStyle === 'circle' || alignStyle === 'circle') {
+    if (emphasizeFunctionRegions && (finderStyle === 'circle' || alignStyle === 'circle')) {
         drawCircleFinderStyle(
             ctx,
             count,
@@ -5797,6 +5820,12 @@ async function handleImageUpload(e) {
         if (allowCoveredFreedomCb) {
             allowCoveredFreedomCb.disabled = !(artisticModeCb && artisticModeCb.checked);
         }
+        if (emphasizeFuncCb) {
+            emphasizeFuncCb.disabled = false;
+            if (typeof emphasizeFuncCb.checked !== 'boolean') {
+                emphasizeFuncCb.checked = true;
+            }
+        }
         if (invertToneCb) {
             invertToneCb.disabled = false;
         }
@@ -5987,6 +6016,10 @@ function clearImportedImage() {
     if (allowCoveredFreedomCb) {
         allowCoveredFreedomCb.checked = false;
         allowCoveredFreedomCb.disabled = true;
+    }
+    if (emphasizeFuncCb) {
+        emphasizeFuncCb.checked = true;
+        emphasizeFuncCb.disabled = true;
     }
     if (invertToneCb) {
         invertToneCb.checked = false;
