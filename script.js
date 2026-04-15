@@ -1260,9 +1260,37 @@ function setEmphasizeSubOptionsEnabled(enabled) {
     });
 }
 
+function getEmphasizeSubControls() {
+    return [emphasizeFormatCb, emphasizeVersionCb, emphasizeFinderCb, emphasizeAlignCb, emphasizeTimingCb].filter(Boolean);
+}
+
+function syncEmphasizeMasterFromSub() {
+    if (!emphasizeFuncCb) return;
+    const controls = getEmphasizeSubControls();
+    if (!controls.length) {
+        emphasizeFuncCb.indeterminate = false;
+        emphasizeFuncCb.checked = true;
+        return;
+    }
+
+    const allOn = controls.every((cb) => cb.checked);
+    const allOff = controls.every((cb) => !cb.checked);
+    if (allOn) {
+        emphasizeFuncCb.indeterminate = false;
+        emphasizeFuncCb.checked = true;
+    } else if (allOff) {
+        emphasizeFuncCb.indeterminate = false;
+        emphasizeFuncCb.checked = false;
+    } else {
+        emphasizeFuncCb.checked = true;
+        emphasizeFuncCb.indeterminate = true;
+    }
+}
+
 function resetEmphasizeOptionsToDefault(disabled = true) {
     if (emphasizeFuncCb) {
         emphasizeFuncCb.checked = true;
+        emphasizeFuncCb.indeterminate = false;
         emphasizeFuncCb.disabled = disabled;
     }
     [emphasizeFormatCb, emphasizeVersionCb, emphasizeFinderCb, emphasizeAlignCb, emphasizeTimingCb].forEach((cb) => {
@@ -1825,14 +1853,17 @@ function init() {
     if (emphasizeFuncCb) {
         resetEmphasizeOptionsToDefault(true);
         emphasizeFuncCb.addEventListener('change', () => {
-            const enableSub = !!(hasImageUpload && emphasizeFuncCb.checked);
-            setEmphasizeSubOptionsEnabled(enableSub);
+            emphasizeFuncCb.indeterminate = false;
+            getEmphasizeSubControls().forEach((cb) => {
+                cb.checked = !!emphasizeFuncCb.checked;
+            });
             invalidateAnimatedArtCache();
             renderQR(false);
         });
         [emphasizeFormatCb, emphasizeVersionCb, emphasizeFinderCb, emphasizeAlignCb, emphasizeTimingCb].forEach((cb) => {
             if (!cb) return;
             cb.addEventListener('change', () => {
+                syncEmphasizeMasterFromSub();
                 invalidateAnimatedArtCache();
                 renderQR(false);
             });
@@ -5918,7 +5949,8 @@ async function handleImageUpload(e) {
         }
         if (emphasizeFuncCb) {
             emphasizeFuncCb.disabled = false;
-            setEmphasizeSubOptionsEnabled(!!emphasizeFuncCb.checked);
+            setEmphasizeSubOptionsEnabled(true);
+            syncEmphasizeMasterFromSub();
         }
         if (invertToneCb) {
             invertToneCb.disabled = false;
