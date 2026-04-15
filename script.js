@@ -1338,8 +1338,7 @@ function isAuroraWhiteNotch(localX, localY, size) {
 function getStyledFinderBit(style, localX, localY, size) {
     if (style === 'classic') return null;
     if (style === 'aurora') {
-        if (!isAuroraCrossBit(localX, localY, size)) return false;
-        return !isAuroraWhiteNotch(localX, localY, size);
+        return getClassicFinderBit(localX, localY, size);
     }
     if (size === 7) {
         if (style === 'circle') return FINDER_CIRCLE_7[localY][localX] === 1;
@@ -1381,14 +1380,6 @@ function getFinderAlignOverride(style, r, c, count) {
 }
 
 function isFinderAlignTransparentCell(style, r, c, count) {
-    if (style !== 'aurora') return false;
-
-    const finderLocal = getFinderLocalCoord(r, c, count);
-    if (finderLocal) return !isAuroraCrossBit(finderLocal.x, finderLocal.y, 7);
-
-    const alignLocal = getAlignLocalCoord(r, c, count);
-    if (alignLocal) return !isAuroraCrossBit(alignLocal.x, alignLocal.y, 5);
-
     return false;
 }
 
@@ -4576,10 +4567,6 @@ function renderQR(isExport, imageOverride) {
                 continue;
             }
 
-            if (cell && cell.type === 'func' && (isFinder || isAlign) && isFinderAlignTransparentCell(activeStyle, r, c, count)) {
-                continue;
-            }
-
             let coverRatio = 0;
             let sampledLum = 0.5;
             let moduleTransparent = true;
@@ -4591,6 +4578,10 @@ function renderQR(isExport, imageOverride) {
             }
 
             const covered = coverRatio > 0;
+            const auroraCoveredTransparent = !!(cell && cell.type === 'func' && (isFinder || isAlign) && activeStyle === 'aurora' && covered);
+            if (auroraCoveredTransparent) {
+                continue;
+            }
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
             const useGhost = (basisGhost || nonBasisGhost) && cell && (cell.type === 'data' || cell.type === 'ec');
