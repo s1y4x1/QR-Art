@@ -1088,6 +1088,7 @@ let generatedQR = null;
 let hasUserEdits = false;
 let hasImageUpload = false;
 let arrowMovePending = false;
+let pendingLiveDrawRender = false;
 let lastWhitenMode = 'none'; // 'white', 'black', 'none'
 let gifPreviewTimer = null;
 let gifPreviewRunning = false;
@@ -4897,6 +4898,7 @@ function drawAt(e) {
 
     if (changed) {
         pendingDrawRecompute = true;
+        scheduleLiveDrawRender();
     }
 }
 
@@ -4916,6 +4918,15 @@ function plotLine(r0, c0, r1, c1, color) {
         if (e2 < dx) { err += dx; r0 += sy; }
     }
     return changed;
+}
+
+function scheduleLiveDrawRender() {
+    if (pendingLiveDrawRender) return;
+    pendingLiveDrawRender = true;
+    requestAnimationFrame(() => {
+        pendingLiveDrawRender = false;
+        renderQR(false);
+    });
 }
 
 function modifyPixel(r, c, targetColor) {
