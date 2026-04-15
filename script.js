@@ -815,6 +815,11 @@ function getAnimatedArtCacheKey() {
         art: !!(artisticModeCb && artisticModeCb.checked),
         covered: !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked),
         emphasizeFunc: !!(emphasizeFuncCb ? emphasizeFuncCb.checked : true),
+        emphasizeFormat: !!(emphasizeFormatCb ? emphasizeFormatCb.checked : true),
+        emphasizeVersion: !!(emphasizeVersionCb ? emphasizeVersionCb.checked : true),
+        emphasizeFinder: !!(emphasizeFinderCb ? emphasizeFinderCb.checked : true),
+        emphasizeAlign: !!(emphasizeAlignCb ? emphasizeAlignCb.checked : true),
+        emphasizeTiming: !!(emphasizeTimingCb ? emphasizeTimingCb.checked : true),
         basis: isImageBasisMode(),
         importActive: !!importState.active,
         importW: precise(importState.width),
@@ -1176,6 +1181,11 @@ const cellSizeAutoBtn = document.getElementById('cell-size-auto-btn');
 const embedImageCb = document.getElementById('embed-image-cb');
 const dynamicPreviewCb = document.getElementById('dynamic-preview-cb');
 const emphasizeFuncCb = document.getElementById('emphasize-func-cb');
+const emphasizeFormatCb = document.getElementById('emphasize-format-cb');
+const emphasizeVersionCb = document.getElementById('emphasize-version-cb');
+const emphasizeFinderCb = document.getElementById('emphasize-finder-cb');
+const emphasizeAlignCb = document.getElementById('emphasize-align-cb');
+const emphasizeTimingCb = document.getElementById('emphasize-timing-cb');
 const invertToneCb = document.getElementById('invert-tone-cb');
 const exportAudioCb = document.getElementById('export-audio-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
@@ -1202,6 +1212,7 @@ let moduleStyle = 'square';
 let finderStyle = 'classic';
 let alignStyle = 'classic';
 let lastNonBasisImportRect = null;
+let lastBasisImportRect = null;
 let basisImageWidth = 0;
 let basisImageHeight = 0;
 let lastArtisticSolveStats = null;
@@ -1239,6 +1250,26 @@ function getTargetColorFromLuminance(lum) {
         return dark ? 0 : 1;
     }
     return dark ? 1 : 0;
+}
+
+function setEmphasizeSubOptionsEnabled(enabled) {
+    const controls = [emphasizeFormatCb, emphasizeVersionCb, emphasizeFinderCb, emphasizeAlignCb, emphasizeTimingCb];
+    controls.forEach((cb) => {
+        if (!cb) return;
+        cb.disabled = !enabled;
+    });
+}
+
+function resetEmphasizeOptionsToDefault(disabled = true) {
+    if (emphasizeFuncCb) {
+        emphasizeFuncCb.checked = true;
+        emphasizeFuncCb.disabled = disabled;
+    }
+    [emphasizeFormatCb, emphasizeVersionCb, emphasizeFinderCb, emphasizeAlignCb, emphasizeTimingCb].forEach((cb) => {
+        if (!cb) return;
+        cb.checked = true;
+        cb.disabled = disabled;
+    });
 }
 
 function isFinderCell(r, c, count) {
@@ -1792,11 +1823,19 @@ function init() {
     }
 
     if (emphasizeFuncCb) {
-        emphasizeFuncCb.checked = true;
-        emphasizeFuncCb.disabled = true;
+        resetEmphasizeOptionsToDefault(true);
         emphasizeFuncCb.addEventListener('change', () => {
+            const enableSub = !!(hasImageUpload && emphasizeFuncCb.checked);
+            setEmphasizeSubOptionsEnabled(enableSub);
             invalidateAnimatedArtCache();
             renderQR(false);
+        });
+        [emphasizeFormatCb, emphasizeVersionCb, emphasizeFinderCb, emphasizeAlignCb, emphasizeTimingCb].forEach((cb) => {
+            if (!cb) return;
+            cb.addEventListener('change', () => {
+                invalidateAnimatedArtCache();
+                renderQR(false);
+            });
         });
     }
 
@@ -1853,8 +1892,23 @@ function init() {
                         relX: importState.relX,
                         relY: importState.relY
                     };
-                    initImportOverlayByMode(natW, natH);
+                    if (lastBasisImportRect) {
+                        importState.width = lastBasisImportRect.width;
+                        importState.height = lastBasisImportRect.height;
+                        importState.relX = lastBasisImportRect.relX;
+                        importState.relY = lastBasisImportRect.relY;
+                        importState.x = canvas.offsetLeft + importState.relX;
+                        importState.y = canvas.offsetTop + importState.relY;
+                    } else {
+                        initImportOverlayByMode(natW, natH);
+                    }
                 } else {
+                    lastBasisImportRect = {
+                        width: importState.width,
+                        height: importState.height,
+                        relX: importState.relX,
+                        relY: importState.relY
+                    };
                     if (lastNonBasisImportRect) {
                         importState.width = lastNonBasisImportRect.width;
                         importState.height = lastNonBasisImportRect.height;
@@ -2200,6 +2254,8 @@ function init() {
         
         // Clear Uploaded Image
         if (importState.active || previewImg.src) {
+               lastNonBasisImportRect = null;
+               lastBasisImportRect = null;
              importState.active = false;
              importState.width = 0;
              importState.height = 0;
@@ -2249,10 +2305,7 @@ function init() {
                  allowCoveredFreedomCb.checked = false;
                  allowCoveredFreedomCb.disabled = true;
              }
-             if (emphasizeFuncCb) {
-                 emphasizeFuncCb.checked = true;
-                 emphasizeFuncCb.disabled = true;
-             }
+             resetEmphasizeOptionsToDefault(true);
              if (invertToneCb) {
                  invertToneCb.checked = false;
                  invertToneCb.disabled = true;
@@ -3170,6 +3223,42 @@ function isFormatInfoCell(rr, cc, count) {
     if (rr === 8 && cc < 9) return true;
     if (rr === 8 && cc >= count - 8) return true;
     return false;
+}
+
+function isVersionInfoCell(rr, cc, count) {
+    const version = Math.max(1, Math.round((count - 17) / 4));
+    if (version < 7) return false;
+    const topRight = rr >= 0 && rr <= 5 && cc >= count - 11 && cc <= count - 9;
+    const bottomLeft = rr >= count - 11 && rr <= count - 9 && cc >= 0 && cc <= 5;
+    return topRight || bottomLeft;
+}
+
+function isTimingPatternCell(rr, cc, count) {
+    if (rr !== 6 && cc !== 6) return false;
+    if (isFormatInfoCell(rr, cc, count)) return false;
+    if (getFinderLocalCoord(rr, cc, count)) return false;
+    if (getAlignLocalCoord(rr, cc, count)) return false;
+    return true;
+}
+
+function getFunctionCellCategory(rr, cc, count) {
+    if (isFormatInfoCell(rr, cc, count)) return 'format';
+    if (isVersionInfoCell(rr, cc, count)) return 'version';
+    if (getFinderLocalCoord(rr, cc, count)) return 'finder';
+    if (getAlignLocalCoord(rr, cc, count)) return 'align';
+    if (isTimingPatternCell(rr, cc, count)) return 'timing';
+    return 'other';
+}
+
+function isFunctionCellEmphasized(rr, cc, count) {
+    if (!emphasizeFuncCb || !emphasizeFuncCb.checked) return false;
+    const category = getFunctionCellCategory(rr, cc, count);
+    if (category === 'format') return !emphasizeFormatCb || emphasizeFormatCb.checked;
+    if (category === 'version') return !emphasizeVersionCb || emphasizeVersionCb.checked;
+    if (category === 'finder') return !emphasizeFinderCb || emphasizeFinderCb.checked;
+    if (category === 'align') return !emphasizeAlignCb || emphasizeAlignCb.checked;
+    if (category === 'timing') return !emphasizeTimingCb || emphasizeTimingCb.checked;
+    return true;
 }
 
 function buildSuffixStringFromBytes(bytes, startBit, endBit) {
@@ -4408,6 +4497,8 @@ function renderQR(isExport, imageOverride) {
     const embedImage = document.getElementById('embed-image-cb') && document.getElementById('embed-image-cb').checked;
     const artisticMode = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
     const emphasizeFunctionRegions = !!(emphasizeFuncCb ? emphasizeFuncCb.checked : true);
+    const emphasizeFinderRegion = emphasizeFunctionRegions && (!emphasizeFinderCb || emphasizeFinderCb.checked);
+    const emphasizeAlignRegion = emphasizeFunctionRegions && (!emphasizeAlignCb || emphasizeAlignCb.checked);
 
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -4525,7 +4616,8 @@ function renderQR(isExport, imageOverride) {
             const showUnmasked = (maskPattern === -2);
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
-            const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeFunctionRegions);
+            const emphasizeThisFunc = !!(cell && cell.type === 'func' && isFunctionCellEmphasized(r, c, count));
+            const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeThisFunc);
 
             if (showUnmasked && cell && (cell.type === 'data' || cell.type === 'ec')) {
                 isDark = isDark ^ (cell.maskVal === 1);
@@ -4561,7 +4653,8 @@ function renderQR(isExport, imageOverride) {
             const y = qrOriginY + (r + qrMargin) * moduleH;
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
-            const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeFunctionRegions);
+            const emphasizeThisFunc = !!(cell && cell.type === 'func' && isFunctionCellEmphasized(r, c, count));
+            const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeThisFunc);
             const deferCircleFinder = (
                 !functionLikeData &&
                 activeStyle === 'circle' &&
@@ -4572,7 +4665,7 @@ function renderQR(isExport, imageOverride) {
 
             if (deferCircleFinder) {
                 if (!isExport && cell) {
-                    if (cell.type === 'func') {
+                    if (cell.type === 'func' && emphasizeThisFunc) {
                         ctx.fillStyle = 'rgba(128, 128, 128, 0.4)';
                         ctx.fillRect(x, y, moduleW, moduleH);
                     } else if (cell.type === 'ec') {
@@ -4698,7 +4791,7 @@ function renderQR(isExport, imageOverride) {
             }
 
             if (!isExport && cell) {
-                if (cell.type === 'func' && emphasizeFunctionRegions) {
+                if (cell.type === 'func' && emphasizeThisFunc) {
                     ctx.fillStyle = 'rgba(128, 128, 128, 0.4)';
                     ctx.fillRect(x, y, moduleW, moduleH);
                 } else if (cell.type === 'ec') {
@@ -4712,7 +4805,7 @@ function renderQR(isExport, imageOverride) {
         }
     }
 
-    if (emphasizeFunctionRegions && (finderStyle === 'circle' || alignStyle === 'circle')) {
+    if ((finderStyle === 'circle' && emphasizeFinderRegion) || (alignStyle === 'circle' && emphasizeAlignRegion)) {
         drawCircleFinderStyle(
             ctx,
             count,
@@ -4722,8 +4815,8 @@ function renderQR(isExport, imageOverride) {
             moduleH,
             fgColor,
             bgColor,
-            finderStyle === 'circle',
-            alignStyle === 'circle'
+            finderStyle === 'circle' && emphasizeFinderRegion,
+            alignStyle === 'circle' && emphasizeAlignRegion
         );
     }
 }
@@ -5678,6 +5771,9 @@ async function handleImageUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
 
+    lastNonBasisImportRect = null;
+    lastBasisImportRect = null;
+
     stopGifPreview();
     invalidateAnimatedArtCache();
     cleanupVideoObjectUrl();
@@ -5822,9 +5918,7 @@ async function handleImageUpload(e) {
         }
         if (emphasizeFuncCb) {
             emphasizeFuncCb.disabled = false;
-            if (typeof emphasizeFuncCb.checked !== 'boolean') {
-                emphasizeFuncCb.checked = true;
-            }
+            setEmphasizeSubOptionsEnabled(!!emphasizeFuncCb.checked);
         }
         if (invertToneCb) {
             invertToneCb.disabled = false;
@@ -5966,6 +6060,8 @@ function updateOutOfBoundsState() {
 
 function clearImportedImage() {
     importState.active = false;
+    lastNonBasisImportRect = null;
+    lastBasisImportRect = null;
     importState.width = 0;
     importState.height = 0;
     importOverlay.classList.remove('import-outside');
@@ -6017,10 +6113,7 @@ function clearImportedImage() {
         allowCoveredFreedomCb.checked = false;
         allowCoveredFreedomCb.disabled = true;
     }
-    if (emphasizeFuncCb) {
-        emphasizeFuncCb.checked = true;
-        emphasizeFuncCb.disabled = true;
-    }
+    resetEmphasizeOptionsToDefault(true);
     if (invertToneCb) {
         invertToneCb.checked = false;
         invertToneCb.disabled = true;
