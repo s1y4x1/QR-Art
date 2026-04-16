@@ -3325,8 +3325,11 @@ function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr, padBytes 
             qr.addData(unescape(encodeURIComponent(userText)), 'Byte');
         }
     }
-    if (padBytes && padBytes.length > 0 && qr.setCustomPadBytes) {
-        qr.setCustomPadBytes(padBytes);
+    if (padBytes !== null && qr.setCustomPadBytes) {
+        // padBytes !== null means pad-freedom path; do NOT append an extra Byte segment.
+        if (padBytes.length > 0) {
+            qr.setCustomPadBytes(padBytes);
+        }
     } else {
         qr.addData(hasSeparator ? ('#' + suffixStr) : suffixStr, 'Byte');
     }
@@ -4445,7 +4448,13 @@ function drawGrid(suffixStr, type, mask, hasSeparator, padBytesForRender = null)
         }
     }
     
-    if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
+    if (padFreedomModeActive) {
+        // In pad-freedom mode, never add Segment 2.
+        // Adding even an empty Byte segment changes capacity and causes boundary overflows.
+        if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
+            qr.setCustomPadBytes(padBytesForRender);
+        }
+    } else if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
         qr.setCustomPadBytes(padBytesForRender);
     } else {
         // Add Segment 2
