@@ -1192,6 +1192,7 @@ const exportAudioCb = document.getElementById('export-audio-cb');
 const imageBasisCb = document.getElementById('image-basis-cb');
 const artisticModeCb = document.getElementById('artistic-mode');
 const allowCoveredFreedomCb = document.getElementById('allow-covered-freedom');
+const fillDirectionSelect = document.getElementById('fill-direction-select');
 const moduleStyleSelect = document.getElementById('module-style');
 const finderStyleSelect = document.getElementById('finder-style');
 const alignmentStyleSelect = document.getElementById('alignment-style');
@@ -1385,6 +1386,23 @@ const ALIGN_POLAR_5 = [
     [null, null, 1, null, null]
 ];
 
+function isOuterCornerBit(localX, localY, size) {
+    const max = size - 1;
+    const inCornerX = localX <= 1 || localX >= max - 1;
+    const inCornerY = localY <= 1 || localY >= max - 1;
+    return inCornerX && inCornerY;
+}
+
+function isInnerCornerBit(localX, localY, size) {
+    const max = size - 2;
+    return (localX === 1 || localX === max) && (localY === 1 || localY === max);
+}
+
+function isWideCrossBit(localX, localY, size, halfWidth = 1) {
+    const mid = Math.floor(size / 2);
+    return Math.abs(localX - mid) <= halfWidth || Math.abs(localY - mid) <= halfWidth;
+}
+
 function isAuroraCrossBit(localX, localY, size) {
     const mid = Math.floor(size / 2);
     return localX === mid || localY === mid;
@@ -1397,21 +1415,50 @@ function isAuroraWhiteNotch(localX, localY, size) {
     return false;
 }
 
+function isFinderStyleTransparentLocal(style, localX, localY, size, covered = false) {
+    if (style === 'cross-clear') {
+        return !!covered && !isWideCrossBit(localX, localY, size, 1);
+    }
+    if (style === 'aurora') {
+        return !!covered && !isAuroraCrossBit(localX, localY, size);
+    }
+    return false;
+}
+
 function getStyledFinderBit(style, localX, localY, size) {
     if (style === 'classic') return null;
-    if (style === 'aurora') {
+
+    if (style === 'aurora' || style === 'cross-clear') {
         return getClassicFinderBit(localX, localY, size);
     }
+
+    if (style === 'corner-cut') {
+        if (isOuterCornerBit(localX, localY, size)) return false;
+        return getClassicFinderBit(localX, localY, size);
+    }
+
+    if (style === 'inner-fill') {
+        if (isInnerCornerBit(localX, localY, size)) return true;
+        return getClassicFinderBit(localX, localY, size);
+    }
+
     if (size === 7) {
         if (style === 'circle') return FINDER_CIRCLE_7[localY][localX] === 1;
-        const v = FINDER_POLAR_7[localY][localX];
+        if (style === 'polar-day' || style === 'polar-night') {
+            const v = FINDER_POLAR_7[localY][localX];
+            if (v === null) return style === 'polar-night';
+            return v === 1;
+        }
+        return getClassicFinderBit(localX, localY, size);
+    }
+
+    if (style === 'circle') return ALIGN_CIRCLE_5[localY][localX] === 1;
+    if (style === 'polar-day' || style === 'polar-night') {
+        const v = ALIGN_POLAR_5[localY][localX];
         if (v === null) return style === 'polar-night';
         return v === 1;
     }
-    if (style === 'circle') return ALIGN_CIRCLE_5[localY][localX] === 1;
-    const v = ALIGN_POLAR_5[localY][localX];
-    if (v === null) return style === 'polar-night';
-    return v === 1;
+    return getClassicFinderBit(localX, localY, size);
 }
 
 function getClassicFinderBit(localX, localY, size) {
@@ -1426,22 +1473,36 @@ function getClassicFinderBit(localX, localY, size) {
 }
 
 function getFinderAlignOverride(style, r, c, count) {
-    if (style === 'classic') return null;
-
     const finderLocal = getFinderLocalCoord(r, c, count);
     if (finderLocal) {
+        if (style === 'classic') {
+            return getClassicFinderBit(finderLocal.x, finderLocal.y, 7);
+        }
         return getStyledFinderBit(style, finderLocal.x, finderLocal.y, 7);
     }
 
     const alignLocal = getAlignLocalCoord(r, c, count);
     if (alignLocal) {
+        if (style === 'classic') {
+            return getClassicFinderBit(alignLocal.x, alignLocal.y, 5);
+        }
         return getStyledFinderBit(style, alignLocal.x, alignLocal.y, 5);
     }
 
     return null;
 }
 
-function isFinderAlignTransparentCell(style, r, c, count) {
+function isFinderAlignTransparentCell(style, r, c, count, covered = false) {
+    const finderLocal = getFinderLocalCoord(r, c, count);
+    if (finderLocal) {
+        return isFinderStyleTransparentLocal(style, finderLocal.x, finderLocal.y, 7, covered);
+    }
+
+    const alignLocal = getAlignLocalCoord(r, c, count);
+    if (alignLocal) {
+        return isFinderStyleTransparentLocal(style, alignLocal.x, alignLocal.y, 5, covered);
+    }
+
     return false;
 }
 
@@ -1852,7 +1913,7 @@ function init() {
     }
 
     if (emphasizeFuncCb) {
-        resetEmphasizeOptionsToDefault(true);
+        resetEmphasizeOptionsToDefault(false);
         emphasizeFuncCb.addEventListener('change', () => {
             emphasizeFuncCb.indeterminate = false;
             getEmphasizeSubControls().forEach((cb) => {
@@ -1899,6 +1960,10 @@ function init() {
     if (allowCoveredFreedomCb) {
         allowCoveredFreedomCb.checked = false;
         allowCoveredFreedomCb.disabled = true;
+    }
+    if (fillDirectionSelect) {
+        fillDirectionSelect.value = 'top-down';
+        fillDirectionSelect.disabled = true;
     }
 
     if (imageBasisCb) {
@@ -2337,7 +2402,11 @@ function init() {
                  allowCoveredFreedomCb.checked = false;
                  allowCoveredFreedomCb.disabled = true;
              }
-             resetEmphasizeOptionsToDefault(true);
+             if (fillDirectionSelect) {
+                 fillDirectionSelect.value = 'top-down';
+                 fillDirectionSelect.disabled = true;
+             }
+             resetEmphasizeOptionsToDefault(false);
              if (invertToneCb) {
                  invertToneCb.checked = false;
                  invertToneCb.disabled = true;
@@ -2405,6 +2474,9 @@ function init() {
                  allowCoveredFreedomCb.disabled = !artCheck.checked;
                  if (!artCheck.checked) allowCoveredFreedomCb.checked = false;
              }
+             if (fillDirectionSelect) {
+                 fillDirectionSelect.disabled = !artCheck.checked;
+             }
              if (shouldDirectAnimatedRecompute()) {
                  await restartDynamicPreviewWithRecompute();
                  return;
@@ -2426,6 +2498,16 @@ function init() {
         });
     }
 
+    if (fillDirectionSelect) {
+        fillDirectionSelect.addEventListener('change', async () => {
+            if (shouldDirectAnimatedRecompute()) {
+                await restartDynamicPreviewWithRecompute();
+                return;
+            }
+            await updateQR();
+        });
+    }
+
     if (computeCancelBtn) {
         computeCancelBtn.addEventListener('click', () => {
             computeCancelRequested = true;
@@ -2443,7 +2525,11 @@ function init() {
     document.addEventListener('mousemove', moveImportDrag);
     document.addEventListener('mouseup', endImportDrag);
 
-    canvas.addEventListener('mousedown', startDraw);
+    canvas.setAttribute('tabindex', '0');
+    canvas.addEventListener('mousedown', (e) => {
+        canvas.focus();
+        startDraw(e);
+    });
     canvas.addEventListener('mousemove', (e) => {
         if (isDragging) drawAt(e);
     });
@@ -2896,9 +2982,14 @@ function drawEyePreviewPattern(pCtx, style, darkColor, moduleCount, originX, ori
 
     for (let r = 0; r < moduleCount; r++) {
         for (let c = 0; c < moduleCount; c++) {
-            const isDark = (style === 'classic')
-                ? getClassicFinderBit(c, r, moduleCount)
+            const isTransparent = isFinderStyleTransparentLocal(style, c, r, moduleCount, true);
+            if (isTransparent) continue;
+            const styled = (style === 'classic')
+                ? null
                 : getStyledFinderBit(style, c, r, moduleCount);
+            const isDark = styled === null
+                ? getClassicFinderBit(c, r, moduleCount)
+                : !!styled;
             if (!isDark) continue;
             drawStyledModuleOn(
                 pCtx,
@@ -2984,6 +3075,9 @@ function getModuleStyleLabel(style) {
 function getFinderStyleLabel(style) {
     const map = {
         classic: '经典',
+        'corner-cut': '夏',
+        'inner-fill': '冬',
+        'cross-clear': '春秋',
         circle: '圆形',
         'polar-day': '极昼',
         'polar-night': '极夜',
@@ -3146,9 +3240,16 @@ function updateArtisticWarning(stats) {
         return;
     }
     artisticWarning.style.display = 'block';
-    const extra = (stats.coveredFreedomUsed > 0)
-        ? `，已启用覆盖区补自由位 ${stats.coveredFreedomUsed}`
-        : '';
+    let extra = '';
+    if (stats.coveredFreedomUsed > 0) {
+        extra += `，已启用覆盖区补自由位 ${stats.coveredFreedomUsed}`;
+    }
+    if (stats.globalGreedyUsed > 0) {
+        extra += `，追加全局补偿位 ${stats.globalGreedyUsed}`;
+    }
+    if (stats.unusedEditableBits > 0) {
+        extra += `，未动用可编辑位 ${stats.unusedEditableBits}`;
+    }
     artisticWarning.textContent = `纠错区仅尽力拟合（未匹配 ${stats.remainingMismatch}/${stats.totalTargets}${extra}）`;
 }
 
@@ -3325,11 +3426,8 @@ function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr, padBytes 
             qr.addData(unescape(encodeURIComponent(userText)), 'Byte');
         }
     }
-    if (padBytes !== null && qr.setCustomPadBytes) {
-        // padBytes !== null means pad-freedom path; do NOT append an extra Byte segment.
-        if (padBytes.length > 0) {
-            qr.setCustomPadBytes(padBytes);
-        }
+    if (padBytes && padBytes.length > 0 && qr.setCustomPadBytes) {
+        qr.setCustomPadBytes(padBytes);
     } else {
         qr.addData(hasSeparator ? ('#' + suffixStr) : suffixStr, 'Byte');
     }
@@ -3418,9 +3516,17 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         return getTargetColorFromLuminance(lum);
     };
 
+    const fillDirection = (fillDirectionSelect && fillDirectionSelect.value)
+        ? fillDirectionSelect.value
+        : 'top-down';
+    const useGlobalDirection = fillDirection === 'global';
+    const allowCoveredFreedom = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
+
+    const initialWork = currentSuffixBytes.slice();
     const mutableByBlock = new Map();
     const coveredMutableByBlock = new Map();
     const ecTargetsByBlock = new Map();
+    const editableBitCoord = new Map();
     const count = generatedQR.getModuleCount();
     for (let r = 0; r < count; r++) {
         for (let c = 0; c < count; c++) {
@@ -3435,6 +3541,9 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
                 continue;
             }
             if (!isEditableDataCell(cell)) continue;
+            if (!editableBitCoord.has(cell.globalBitIndex)) {
+                editableBitCoord.set(cell.globalBitIndex, { r, c });
+            }
             const t = targetAt(r, c);
             const byteIndex = Math.floor(cell.globalBitIndex / 8);
             const blockRow = dataByteBlockRow[byteIndex];
@@ -3522,19 +3631,135 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
     let blocksNoFreedom = 0;
     let coveredFreedomUsed = 0;
 
+    const globalFallbackBits = new Set();
+    mutableByBlock.forEach((arr) => {
+        if (!arr) return;
+        for (let i = 0; i < arr.length; i++) globalFallbackBits.add(arr[i]);
+    });
+    if (allowCoveredFreedom) {
+        coveredMutableByBlock.forEach((arr) => {
+            if (!arr) return;
+            for (let i = 0; i < arr.length; i++) globalFallbackBits.add(arr[i]);
+        });
+    }
+
+    const getBitCoord = (g) => editableBitCoord.get(g) || null;
+
+    const sortBitsByDirection = (bitList) => {
+        if (!Array.isArray(bitList) || bitList.length <= 1) return bitList;
+        if (fillDirection === 'top-down' || fillDirection === 'global') return bitList;
+
+        bitList.sort((a, b) => {
+            const pa = getBitCoord(a) || { r: 0, c: 0 };
+            const pb = getBitCoord(b) || { r: 0, c: 0 };
+
+            if (fillDirection === 'bottom-up') {
+                if (pa.r !== pb.r) return pb.r - pa.r;
+                if (pa.c !== pb.c) return pa.c - pb.c;
+            } else if (fillDirection === 'left-right') {
+                if (pa.c !== pb.c) return pa.c - pb.c;
+                if (pa.r !== pb.r) return pa.r - pb.r;
+            } else if (fillDirection === 'right-left') {
+                if (pa.c !== pb.c) return pb.c - pa.c;
+                if (pa.r !== pb.r) return pa.r - pb.r;
+            }
+
+            return a - b;
+        });
+        return bitList;
+    };
+
     const allTargetRows = [...ecTargetsByBlock.keys()];
-    const totalProgressSteps = Math.max(1, allTargetRows.length * 3);
+    if (fillDirection !== 'top-down' && fillDirection !== 'global') {
+        const rowMetrics = new Map();
+        allTargetRows.forEach((row) => {
+            const candidateBits = [...new Set([
+                ...(mutableByBlock.get(row) || []),
+                ...(coveredMutableByBlock.get(row) || [])
+            ])];
+            const coords = [];
+            for (let i = 0; i < candidateBits.length; i++) {
+                const p = getBitCoord(candidateBits[i]);
+                if (p) coords.push(p);
+            }
+
+            if (!coords.length) {
+                const targets = ecTargetsByBlock.get(row) || [];
+                for (let i = 0; i < targets.length; i++) {
+                    coords.push({ r: targets[i].r, c: targets[i].c });
+                }
+            }
+
+            if (!coords.length) {
+                rowMetrics.set(row, { avgR: 0, avgC: 0, minR: 0, maxR: 0, minC: 0, maxC: 0 });
+                return;
+            }
+
+            let sumR = 0;
+            let sumC = 0;
+            let minR = Infinity;
+            let maxR = -Infinity;
+            let minC = Infinity;
+            let maxC = -Infinity;
+            for (let i = 0; i < coords.length; i++) {
+                const p = coords[i];
+                sumR += p.r;
+                sumC += p.c;
+                if (p.r < minR) minR = p.r;
+                if (p.r > maxR) maxR = p.r;
+                if (p.c < minC) minC = p.c;
+                if (p.c > maxC) maxC = p.c;
+            }
+
+            rowMetrics.set(row, {
+                avgR: sumR / coords.length,
+                avgC: sumC / coords.length,
+                minR,
+                maxR,
+                minC,
+                maxC
+            });
+        });
+
+        allTargetRows.sort((a, b) => {
+            const ma = rowMetrics.get(a) || { avgR: 0, avgC: 0, minR: 0, maxR: 0, minC: 0, maxC: 0 };
+            const mb = rowMetrics.get(b) || { avgR: 0, avgC: 0, minR: 0, maxR: 0, minC: 0, maxC: 0 };
+
+            if (fillDirection === 'bottom-up') {
+                if (ma.maxR !== mb.maxR) return mb.maxR - ma.maxR;
+                if (ma.avgR !== mb.avgR) return mb.avgR - ma.avgR;
+                if (ma.minC !== mb.minC) return ma.minC - mb.minC;
+            } else if (fillDirection === 'left-right') {
+                if (ma.minC !== mb.minC) return ma.minC - mb.minC;
+                if (ma.avgC !== mb.avgC) return ma.avgC - mb.avgC;
+                if (ma.minR !== mb.minR) return ma.minR - mb.minR;
+            } else if (fillDirection === 'right-left') {
+                if (ma.maxC !== mb.maxC) return mb.maxC - ma.maxC;
+                if (ma.avgC !== mb.avgC) return mb.avgC - ma.avgC;
+                if (ma.minR !== mb.minR) return ma.minR - mb.minR;
+            }
+
+            return a - b;
+        });
+    }
+
+    const blockProgressSteps = allTargetRows.length;
+    const globalProgressSteps = useGlobalDirection
+        ? Math.max(1, Math.ceil(Math.max(1, globalFallbackBits.size) / 32))
+        : 0;
+    const totalProgressSteps = Math.max(1, blockProgressSteps + globalProgressSteps);
     for (let bi = 0; bi < allTargetRows.length; bi++) {
         if (isCanceled()) return { canceled: true };
         const row = allTargetRows[bi];
         const primaryFreedoms = (mutableByBlock.get(row) || []);
         const coveredFreedoms = (coveredMutableByBlock.get(row) || []);
-        let freedoms = [...new Set(primaryFreedoms)];
-        const extraCoveredFreedoms = [...new Set(coveredFreedoms)].filter((g) => !freedoms.includes(g));
+        let freedoms = sortBitsByDirection([...new Set(primaryFreedoms)]);
+        const extraCoveredFreedoms = sortBitsByDirection(
+            [...new Set(coveredFreedoms)].filter((g) => !freedoms.includes(g))
+        );
         const targets = (ecTargetsByBlock.get(row) || []);
         if (!targets.length) continue;
         totalTargets += targets.length;
-        const allowCoveredFreedom = !!(allowCoveredFreedomCb && allowCoveredFreedomCb.checked);
         totalFreedoms += freedoms.length + (allowCoveredFreedom ? extraCoveredFreedoms.length : 0);
         if (!freedoms.length && allowCoveredFreedom && extraCoveredFreedoms.length) {
             freedoms = extraCoveredFreedoms.slice();
@@ -3543,7 +3768,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         if (!freedoms.length) {
             blocksNoFreedom += 1;
             remainingMismatch += targets.length;
-            if (onProgress) onProgress(bi * 3 + 3, totalProgressSteps);
+            if (onProgress) onProgress(Math.min(blockProgressSteps, bi + 1), totalProgressSteps);
             continue;
         }
 
@@ -3593,8 +3818,6 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
                 await cooperativeYield();
             }
         }
-        if (onProgress) onProgress(bi * 3 + 1, totalProgressSteps);
-
         const solution = solveLinearGF2(matrix, rhs, freedoms.length);
         let workingBits = baseBits.slice();
         if (solution) {
@@ -3610,8 +3833,6 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
             workingBits = evalQrBits(work);
             bestMismatch = evalMismatchFromBits(workingBits);
         }
-        if (onProgress) onProgress(bi * 3 + 2, totalProgressSteps);
-
         if (!solution) {
             workingBits = baseBits.slice();
             bestMismatch = evalMismatchFromBits(workingBits);
@@ -3619,7 +3840,7 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
 
         // Local improvement on top of linear solve result:
         // try beneficial single-bit flips using the precomputed influence matrix.
-        const hillPasses = 3;
+        const hillPasses = useGlobalDirection ? 3 : 1;
         for (let pass = 0; pass < hillPasses && bestMismatch > 0; pass++) {
             let improvedThisPass = false;
             for (let j = 0; j < freedoms.length; j++) {
@@ -3657,7 +3878,8 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
 
         if (allowCoveredFreedom && extraCoveredFreedoms.length > 0 && bestMismatch > 0) {
             let usedCoveredInRow = 0;
-            for (let pass = 0; pass < 2 && bestMismatch > 0; pass++) {
+            const coveredPasses = useGlobalDirection ? 2 : 1;
+            for (let pass = 0; pass < coveredPasses && bestMismatch > 0; pass++) {
                 let improved = false;
                 for (let i = 0; i < extraCoveredFreedoms.length; i++) {
                     if (isCanceled()) return { canceled: true };
@@ -3688,11 +3910,110 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
 
         remainingMismatch += bestMismatch;
 
-        if (onProgress) onProgress(bi * 3 + 3, totalProgressSteps);
+        if (onProgress) onProgress(Math.min(blockProgressSteps, bi + 1), totalProgressSteps);
         if ((bi & 1) === 1) {
             await cooperativeYield();
         }
     }
+
+    let globalGreedyUsed = 0;
+    let unusedEditableBits = 0;
+
+    if (useGlobalDirection && remainingMismatch > 0 && globalFallbackBits.size > 0 && totalTargets > 0) {
+        let globalProgressDone = 0;
+        const pushGlobalProgress = () => {
+            if (!onProgress) return;
+            globalProgressDone = Math.min(globalProgressSteps, globalProgressDone + 1);
+            onProgress(blockProgressSteps + globalProgressDone, totalProgressSteps);
+        };
+
+        const allTargets = [];
+        ecTargetsByBlock.forEach((arr) => {
+            if (arr && arr.length) allTargets.push(...arr);
+        });
+
+        const evalGlobalMismatch = (bytes) => {
+            const suffix = usePadFreedomMode ? '' : buildSuffixStringFromBytes(bytes, payloadStartBit, payloadEditableEndBit);
+            const padBytes = usePadFreedomMode ? collectBytesFromBitRange(bytes, payloadStartBit, payloadEditableEndBit) : null;
+            const qrEval = createQrFromSuffix(typeNumber, evalMask, hasSeparator, suffix, padBytes);
+            let mm = 0;
+            for (let i = 0; i < allTargets.length; i++) {
+                const p = allTargets[i];
+                const bit = qrEval.isDark(p.r, p.c) ? 1 : 0;
+                if (bit !== p.t) mm++;
+            }
+            return mm;
+        };
+
+        const bitDiffersFromInitial = (g) => {
+            const bIdx = Math.floor(g / 8);
+            const bitPos = 7 - (g % 8);
+            if (bIdx < 0 || bIdx >= work.length || bIdx >= initialWork.length) return false;
+            const cur = (work[bIdx] >> bitPos) & 1;
+            const base = (initialWork[bIdx] >> bitPos) & 1;
+            return cur !== base;
+        };
+
+        let globalMismatch = evalGlobalMismatch(work);
+        const editableList = [...globalFallbackBits];
+        editableList.sort((a, b) => {
+            const ad = bitDiffersFromInitial(a) ? 1 : 0;
+            const bd = bitDiffersFromInitial(b) ? 1 : 0;
+            return ad - bd;
+        });
+
+        const globalPasses = 3;
+        for (let pass = 0; pass < globalPasses && globalMismatch > 0; pass++) {
+            let improved = false;
+            for (let i = 0; i < editableList.length; i++) {
+                if (isCanceled()) return { canceled: true };
+                const g = editableList[i];
+                const bIdx = Math.floor(g / 8);
+                const bitPos = 7 - (g % 8);
+                if (bIdx < 0 || bIdx >= work.length) continue;
+
+                const wasChanged = bitDiffersFromInitial(g);
+                work[bIdx] ^= (1 << bitPos);
+                const nowMismatch = evalGlobalMismatch(work);
+                if (nowMismatch < globalMismatch) {
+                    globalMismatch = nowMismatch;
+                    improved = true;
+                    if (!wasChanged) globalGreedyUsed += 1;
+                } else {
+                    work[bIdx] ^= (1 << bitPos);
+                }
+
+                if ((i & 31) === 31) {
+                    pushGlobalProgress();
+                    await cooperativeYield();
+                }
+                if (globalMismatch <= 0) break;
+            }
+            if (!improved) break;
+        }
+
+        while (globalProgressDone < globalProgressSteps) {
+            pushGlobalProgress();
+        }
+
+        remainingMismatch = globalMismatch;
+        for (let i = 0; i < editableList.length; i++) {
+            if (!bitDiffersFromInitial(editableList[i])) unusedEditableBits += 1;
+        }
+    } else if (globalFallbackBits.size > 0) {
+        const editableList = [...globalFallbackBits];
+        for (let i = 0; i < editableList.length; i++) {
+            const g = editableList[i];
+            const bIdx = Math.floor(g / 8);
+            const bitPos = 7 - (g % 8);
+            if (bIdx < 0 || bIdx >= work.length || bIdx >= initialWork.length) continue;
+            const cur = (work[bIdx] >> bitPos) & 1;
+            const base = (initialWork[bIdx] >> bitPos) & 1;
+            if (cur === base) unusedEditableBits += 1;
+        }
+    }
+
+    if (onProgress) onProgress(totalProgressSteps, totalProgressSteps);
 
     currentSuffixBytes = work;
     lastArtisticSolveStats = {
@@ -3700,6 +4021,8 @@ async function optimizeSuffixForArtisticMode(typeNumber, evalMask, hasSeparator,
         totalTargets,
         remainingMismatch,
         coveredFreedomUsed,
+        globalGreedyUsed,
+        unusedEditableBits,
         coverageLimited: blocksNoFreedom > 0 || totalFreedoms < totalTargets
     };
     return { canceled: false };
@@ -4448,13 +4771,7 @@ function drawGrid(suffixStr, type, mask, hasSeparator, padBytesForRender = null)
         }
     }
     
-    if (padFreedomModeActive) {
-        // In pad-freedom mode, never add Segment 2.
-        // Adding even an empty Byte segment changes capacity and causes boundary overflows.
-        if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
-            qr.setCustomPadBytes(padBytesForRender);
-        }
-    } else if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
+    if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
         qr.setCustomPadBytes(padBytesForRender);
     } else {
         // Add Segment 2
@@ -4522,8 +4839,8 @@ function renderQR(isExport, imageOverride) {
     const embedImage = document.getElementById('embed-image-cb') && document.getElementById('embed-image-cb').checked;
     const artisticMode = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
     const emphasizeFunctionRegions = !!(emphasizeFuncCb ? emphasizeFuncCb.checked : true);
-    const emphasizeFinderRegion = emphasizeFunctionRegions && (!emphasizeFinderCb || emphasizeFinderCb.checked);
-    const emphasizeAlignRegion = emphasizeFunctionRegions && (!emphasizeAlignCb || emphasizeAlignCb.checked);
+    const emphasizeFinderRegion = finderStyle === 'circle' || (emphasizeFunctionRegions && (!emphasizeFinderCb || emphasizeFinderCb.checked));
+    const emphasizeAlignRegion = alignStyle === 'circle' || (emphasizeFunctionRegions && (!emphasizeAlignCb || emphasizeAlignCb.checked));
 
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -4557,7 +4874,7 @@ function renderQR(isExport, imageOverride) {
             offCtx.drawImage(imageSource, imgDrawX, imgDrawY, imgDrawW, imgDrawH);
             offData = offCtx.getImageData(0, 0, canvas.width, canvas.height).data;
 
-            const shouldDrawBg = basisMode || (embedImage && (isExport || !importState.active));
+            const shouldDrawBg = basisMode || embedImage;
             if (shouldDrawBg) {
                 ctx.drawImage(imageSource, imgDrawX, imgDrawY, imgDrawW, imgDrawH);
             }
@@ -4641,7 +4958,10 @@ function renderQR(isExport, imageOverride) {
             const showUnmasked = (maskPattern === -2);
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
-            const emphasizeThisFunc = !!(cell && cell.type === 'func' && isFunctionCellEmphasized(r, c, count));
+            const isEyeCell = !!(cell && cell.type === 'func' && (isFinder || isAlign));
+            const eyeStyle = isFinder ? finderStyle : (isAlign ? alignStyle : null);
+            const forceEyeEmphasize = !!(isEyeCell && eyeStyle === 'circle');
+            const emphasizeThisFunc = !!((cell && cell.type === 'func' && isFunctionCellEmphasized(r, c, count)) || forceEyeEmphasize);
             const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeThisFunc);
 
             if (showUnmasked && cell && (cell.type === 'data' || cell.type === 'ec')) {
@@ -4658,8 +4978,7 @@ function renderQR(isExport, imageOverride) {
                 if (val === 0) isDark = false;
             }
 
-            if (!functionLikeData && cell && cell.type === 'func' && (isFinder || isAlign)) {
-                const eyeStyle = isFinder ? finderStyle : alignStyle;
+            if (isEyeCell && eyeStyle) {
                 const override = getFinderAlignOverride(eyeStyle, r, c, count);
                 if (override !== null) isDark = override;
             }
@@ -4678,14 +4997,15 @@ function renderQR(isExport, imageOverride) {
             const y = qrOriginY + (r + qrMargin) * moduleH;
             const isFinder = isFinderCell(r, c, count);
             const isAlign = !!getAlignLocalCoord(r, c, count);
-            const emphasizeThisFunc = !!(cell && cell.type === 'func' && isFunctionCellEmphasized(r, c, count));
+            const isEyeCell = !!(cell && cell.type === 'func' && (isFinder || isAlign));
+            const eyeStyle = isFinder ? finderStyle : (isAlign ? alignStyle : null);
+            const forceEyeEmphasize = !!(isEyeCell && eyeStyle === 'circle');
+            const emphasizeThisFunc = !!((cell && cell.type === 'func' && isFunctionCellEmphasized(r, c, count)) || forceEyeEmphasize);
             const functionLikeData = !!(cell && cell.type === 'func' && !emphasizeThisFunc);
             const deferCircleFinder = (
                 !functionLikeData &&
-                activeStyle === 'circle' &&
-                cell &&
-                cell.type === 'func' &&
-                (isFinder || isAlign)
+                eyeStyle === 'circle' &&
+                isEyeCell
             );
 
             if (deferCircleFinder) {
@@ -4715,13 +5035,18 @@ function renderQR(isExport, imageOverride) {
             }
 
             const covered = coverRatio > 0;
-            if (!functionLikeData && cell && cell.type === 'func' && (isFinder || isAlign) && activeStyle === 'aurora' && covered) {
-                const local = isFinder ? getFinderLocalCoord(r, c, count) : getAlignLocalCoord(r, c, count);
-                const size = isFinder ? 7 : 5;
-                if (!local || !isAuroraCrossBit(local.x, local.y, size)) {
+            if (isEyeCell && eyeStyle) {
+                if (isFinderAlignTransparentCell(eyeStyle, r, c, count, covered)) {
                     continue;
                 }
-                isDark = !isAuroraWhiteNotch(local.x, local.y, size);
+
+                if (eyeStyle === 'aurora' && covered) {
+                    const local = isFinder ? getFinderLocalCoord(r, c, count) : getAlignLocalCoord(r, c, count);
+                    const size = isFinder ? 7 : 5;
+                    if (local && isAuroraCrossBit(local.x, local.y, size)) {
+                        isDark = !isAuroraWhiteNotch(local.x, local.y, size);
+                    }
+                }
             }
             const basisGhost = basisMode && embedImage;
             const nonBasisGhost = !basisMode && embedImage && covered;
@@ -5212,6 +5537,9 @@ function handleGlobalKey(e) {
     }
     // Ctrl+C
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (document.activeElement !== canvas) {
+            return;
+        }
         e.preventDefault();
         copyToClipboard();
     }
@@ -5964,6 +6292,9 @@ async function handleImageUpload(e) {
         if (allowCoveredFreedomCb) {
             allowCoveredFreedomCb.disabled = !(artisticModeCb && artisticModeCb.checked);
         }
+        if (fillDirectionSelect) {
+            fillDirectionSelect.disabled = !(artisticModeCb && artisticModeCb.checked);
+        }
         if (emphasizeFuncCb) {
             emphasizeFuncCb.disabled = false;
             setEmphasizeSubOptionsEnabled(true);
@@ -6024,7 +6355,8 @@ function updateOverlayTransform() {
     importOverlay.style.top = importState.y + 'px';
     const basis = isImageBasisMode();
     importOverlay.classList.toggle('image-basis', basis);
-    if (previewImg) previewImg.style.display = basis ? 'none' : 'block';
+    const embedOn = !!(embedImageCb && embedImageCb.checked);
+    if (previewImg) previewImg.style.display = (basis || embedOn) ? 'none' : 'block';
     updateAutoCellSizeButtonLabel();
     syncImageSizeInputs();
 }
@@ -6162,7 +6494,11 @@ function clearImportedImage() {
         allowCoveredFreedomCb.checked = false;
         allowCoveredFreedomCb.disabled = true;
     }
-    resetEmphasizeOptionsToDefault(true);
+    if (fillDirectionSelect) {
+        fillDirectionSelect.value = 'top-down';
+        fillDirectionSelect.disabled = true;
+    }
+    resetEmphasizeOptionsToDefault(false);
     if (invertToneCb) {
         invertToneCb.checked = false;
         invertToneCb.disabled = true;

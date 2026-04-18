@@ -85,15 +85,21 @@
                         <button class="style-item style-btn" data-style-target="finder" data-style="circle" type="button"><canvas data-style-preview="finder-circle" width="112" height="112"></canvas><div class="style-name">圆形</div></button>
                         <button class="style-item style-btn" data-style-target="finder" data-style="polar-day" type="button"><canvas data-style-preview="finder-polar-day" width="112" height="112"></canvas><div class="style-name">极昼</div></button>
                         <button class="style-item style-btn" data-style-target="finder" data-style="polar-night" type="button"><canvas data-style-preview="finder-polar-night" width="112" height="112"></canvas><div class="style-name">极夜</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="corner-cut" type="button"><canvas data-style-preview="finder-corner-cut" width="112" height="112"></canvas><div class="style-name">夏</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="inner-fill" type="button"><canvas data-style-preview="finder-inner-fill" width="112" height="112"></canvas><div class="style-name">冬</div></button>
                         <button class="style-item style-btn" data-style-target="finder" data-style="aurora" type="button"><canvas data-style-preview="finder-aurora" width="112" height="112"></canvas><div class="style-name">极光</div></button>
+                        <button class="style-item style-btn" data-style-target="finder" data-style="cross-clear" type="button"><canvas data-style-preview="finder-cross-clear" width="112" height="112"></canvas><div class="style-name">春秋</div></button>
                     </div>
                 </details>
                 <select id="finder-style" style="display:none;">
                     <option value="classic" selected>经典</option>
-                    <option value="circle">圆形</option>
+                    <option value="corner-cut">夏</option>
                     <option value="polar-day">极昼</option>
+                    <option value="inner-fill">冬</option>
                     <option value="polar-night">极夜</option>
+                    <option value="cross-clear">春秋</option>
                     <option value="aurora">极光</option>
+                    <option value="circle">圆形</option>
                 </select>
             </div>
 
@@ -183,11 +189,22 @@
                         利用纠错码区
                     </label>
                     <p class="hint option-hint">开启后将优先调整数据位，以尽可能让纠错码区更贴近图片明暗。</p>
-                    <label class="inline-check" style="margin-top: 6px;">
+                    <label class="inline-check" style="margin-top: 6px; margin-left: 20px;">
                         <input type="checkbox" id="allow-covered-freedom">
                         利用图片覆盖数据区
                     </label>
-                    <p class="hint option-hint">开启后允许借用图片覆盖的数据区位作为额外自由度，提升拟合能力。</p>
+                    <p class="hint option-hint" style="margin-left: 20px;">开启后允许借用图片覆盖的数据区位作为额外自由度，提升拟合能力。</p>
+                    <label style="display:flex; align-items:center; gap:8px; margin-top: 6px; margin-left: 20px;">
+                        <span>填充方向</span>
+                        <select id="fill-direction-select" style="max-width: 180px;" disabled>
+                            <option value="top-down" selected>从上到下</option>
+                            <option value="bottom-up">从下到上</option>
+                            <option value="left-right">从左到右</option>
+                            <option value="right-left">从右到左</option>
+                            <option value="global">全局</option>
+                        </select>
+                    </label>
+                    <p class="hint option-hint" style="margin-left: 20px;">前4个方向仅进行一轮分块计算；全局会尽可能利用所有未被图片覆盖的数据区模块。</p>
                     <div id="artistic-warning" class="artistic-warning" style="display: none;"></div>
                 </div>
 
