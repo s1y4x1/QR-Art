@@ -3428,7 +3428,7 @@ function createQrFromSuffix(typeNumber, mask, hasSeparator, suffixStr, padBytes 
     }
     if (padBytes && padBytes.length > 0 && qr.setCustomPadBytes) {
         qr.setCustomPadBytes(padBytes);
-    } else {
+    } else if (hasSeparator || (suffixStr && suffixStr.length > 0)) {
         qr.addData(hasSeparator ? ('#' + suffixStr) : suffixStr, 'Byte');
     }
     if (mask !== -1 && qr.makeMasked) qr.makeMasked(mask);
@@ -4773,7 +4773,7 @@ function drawGrid(suffixStr, type, mask, hasSeparator, padBytesForRender = null)
     
     if (padBytesForRender && padBytesForRender.length > 0 && qr.setCustomPadBytes) {
         qr.setCustomPadBytes(padBytesForRender);
-    } else {
+    } else if (hasSeparator || (suffixStr && suffixStr.length > 0)) {
         // Add Segment 2
         let seg2Data = suffixStr;
         if (hasSeparator) seg2Data = "#" + suffixStr;
