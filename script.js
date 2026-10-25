@@ -1509,12 +1509,20 @@ function isAuroraWhiteNotch(localX, localY, size) {
     return false;
 }
 
-function isFinderStyleTransparentLocal(style, localX, localY, size, covered = false) {
+function isFinderStyleTransparentLocal(style, localX, localY, size, covered = false, forceTransparent = false) {
     if (style === 'cross-clear') {
-        return !!covered && !isWideCrossBit(localX, localY, size, 1);
+        if (!(covered || forceTransparent)) return false;
+        if (size === 5) {
+            const max = size - 1;
+            return (localX === 0 || localX === max) && (localY === 0 || localY === max);
+        }
+        return !isWideCrossBit(localX, localY, size, 1);
     }
     if (style === 'aurora') {
-        return !!covered && !isAuroraCrossBit(localX, localY, size);
+        // Without an uploaded background, only finder-pattern Aurora cutouts
+        // become transparent during PNG export. Alignment Aurora keeps its
+        // existing image-covered behavior.
+        return !!(covered || (forceTransparent && size === 7)) && !isAuroraCrossBit(localX, localY, size);
     }
     return false;
 }
@@ -1586,15 +1594,15 @@ function getFinderAlignOverride(style, r, c, count) {
     return null;
 }
 
-function isFinderAlignTransparentCell(style, r, c, count, covered = false) {
+function isFinderAlignTransparentCell(style, r, c, count, covered = false, forceTransparent = false) {
     const finderLocal = getFinderLocalCoord(r, c, count);
     if (finderLocal) {
-        return isFinderStyleTransparentLocal(style, finderLocal.x, finderLocal.y, 7, covered);
+        return isFinderStyleTransparentLocal(style, finderLocal.x, finderLocal.y, 7, covered, forceTransparent);
     }
 
     const alignLocal = getAlignLocalCoord(r, c, count);
     if (alignLocal) {
-        return isFinderStyleTransparentLocal(style, alignLocal.x, alignLocal.y, 5, covered);
+        return isFinderStyleTransparentLocal(style, alignLocal.x, alignLocal.y, 5, covered, forceTransparent);
     }
 
     return false;
@@ -5531,7 +5539,7 @@ function drawGrid(suffixStr, type, mask, hasSeparator, padBytesForRender = null)
     renderQR(false);
 }
 
-function renderQR(isExport, imageOverride, forceCompositeSource) {
+function renderQR(isExport, imageOverride, forceCompositeSource, exportMime) {
     if (!generatedQR) return;
     const count = generatedQR.getModuleCount();
     const baseSize = (count + 2 * qrMargin) * CELL_SIZE;
@@ -5566,6 +5574,11 @@ function renderQR(isExport, imageOverride, forceCompositeSource) {
     const fgColor = foregroundColor || '#000000';
     const bgColor = backgroundColor || '#ffffff';
     const embedImage = document.getElementById('embed-image-cb') && document.getElementById('embed-image-cb').checked;
+    const exportTransparentEyeCutouts = !!(
+        isExport &&
+        exportMime === 'image/png' &&
+        !hasImageUpload
+    );
     const artisticMode = document.getElementById('artistic-mode') && document.getElementById('artistic-mode').checked;
     const emphasizeFunctionRegions = !!(emphasizeFuncCb ? emphasizeFuncCb.checked : true);
     const emphasizeFinderRegion = finderStyle === 'circle' || (emphasizeFunctionRegions && (!emphasizeFinderCb || emphasizeFinderCb.checked));
@@ -5829,7 +5842,17 @@ downRight: r < count - 1 && c < count - 1 && finalDark[r + 1][c + 1] === isDark 
 
             const covered = coverRatio > 0;
             if (isEyeCell && eyeStyle) {
-                if (isFinderAlignTransparentCell(eyeStyle, r, c, count, covered)) {
+                if (isFinderAlignTransparentCell(
+                    eyeStyle,
+                    r,
+                    c,
+                    count,
+                    covered,
+                    exportTransparentEyeCutouts
+                )) {
+                    if (exportTransparentEyeCutouts) {
+                        ctx.clearRect(x, y, moduleW, moduleH);
+                    }
                     continue;
                 }
 
@@ -6717,7 +6740,7 @@ async function exportCurrentBlob(mime) {
 
 function exportStaticBlob(mime) {
     return new Promise((resolve, reject) => {
-        renderQR(true);
+        renderQR(true, undefined, undefined, mime || 'image/png');
         canvas.toBlob((blob) => {
             renderQR(false);
             if (!blob) {
