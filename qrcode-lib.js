@@ -36,6 +36,7 @@ var qrcode = function() {
     var _modules = null;
     var _moduleBits = null;
     var _trackModuleBits = false;
+    var _selectedMask = null;
     var _moduleCount = 0;
     var _dataCache = null;
     var _dataList = [];
@@ -44,6 +45,7 @@ var qrcode = function() {
     var _this = {};
 
     var makeImpl = function(test, maskPattern) {
+      if (!test) _selectedMask = maskPattern;
 
       _moduleCount = _typeNumber * 4 + 17;
       _modules = function(moduleCount) {
@@ -453,6 +455,7 @@ var qrcode = function() {
     };
     // Interleaved codeword bit index; function modules have no index.
     _this.setModuleBitTracking = function(enabled) { _trackModuleBits = !!enabled; };
+    _this.getMaskPattern = function() { return _selectedMask; };
     _this.getModuleBitIndex = function(row, col) {
       return _moduleBits ? _moduleBits[row][col] : null;
     };

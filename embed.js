@@ -1,115 +1,164 @@
-/* QR-Art embed protocol v1. The editor and extension hosts remain independent. */
+/* QR-Art embed protocol v2: generic QR parameters and caller-supplied bitmap frames. */
 (() => {
   'use strict';
   const canvas = document.getElementById('qr'), ctx = canvas.getContext('2d');
-  const status = document.getElementById('status');
-  // Five-column, seven-row bitmap glyphs (least significant bit is the top row).
-  const font = {
-    '0':[62,81,73,69,62],'1':[0,66,127,64,0],'2':[66,97,81,73,70],'3':[33,65,69,75,49],
-    '4':[24,20,18,127,16],'5':[39,69,69,69,57],'6':[60,74,73,73,48],'7':[1,113,9,5,3],
-    '8':[54,73,73,73,54],'9':[6,73,73,41,30],
-    A:[126,17,17,17,126],B:[127,73,73,73,54],C:[62,65,65,65,34],D:[127,65,65,34,28],
-    E:[127,73,73,73,65],F:[127,9,9,9,1],G:[62,65,73,73,122],H:[127,8,8,8,127],
-    I:[0,65,127,65,0],J:[32,64,65,63,1],K:[127,8,20,34,65],L:[127,64,64,64,64],
-    M:[127,2,12,2,127],N:[127,4,8,16,127],O:[62,65,65,65,62],P:[127,9,9,9,6],
-    Q:[62,65,81,33,94],R:[127,9,25,41,70],S:[70,73,73,73,49],T:[1,1,127,1,1],
-    U:[63,64,64,64,63],V:[31,32,64,32,31],W:[63,64,56,64,63],X:[99,20,8,20,99],
-    Y:[7,8,112,8,7],Z:[97,81,73,69,67],
-    a:[32,84,84,84,120],b:[127,72,68,68,56],c:[56,68,68,68,32],d:[56,68,68,72,127],
-    e:[56,84,84,84,24],f:[8,126,9,1,2],g:[12,82,82,82,62],h:[127,8,4,4,120],
-    i:[0,68,125,64,0],j:[32,64,68,61,0],k:[127,16,40,68,0],l:[0,65,127,64,0],
-    m:[124,4,24,4,120],n:[124,8,4,4,120],o:[56,68,68,68,56],p:[124,20,20,20,8],
-    q:[8,20,20,24,124],r:[124,8,4,4,8],s:[72,84,84,84,32],t:[4,63,68,64,32],
-    u:[60,64,64,32,124],v:[28,32,64,32,28],w:[60,64,48,64,60],x:[68,40,16,40,68],
-    y:[12,80,80,80,60],z:[68,100,84,76,68],
-    '.':[0,96,96,0,0],'/':[32,16,8,4,2],'-':[8,8,8,8,8],'_':[64,64,64,64,64],
-    ':':[0,54,54,0,0],'?':[2,1,81,9,6],'=':[20,20,20,20,20],'&':[54,73,85,34,80],
-    '%':[99,19,8,100,99],'#':[20,127,20,127,20],'~':[8,4,8,16,8],' ':[0,0,0,0,0]
+  const status = document.getElementById('status'), protocol = 2;
+  let state = null, ownerOrigin = null, requestId = null, animation = 0, paused = false;
+  let elapsed = 0, lastTime = null, previous = -1, finished = false;
+  const reply = message => {
+    if (parent !== window && ownerOrigin !== null)
+      parent.postMessage({protocol, requestId, ...message}, ownerOrigin === 'null' ? '*' : ownerOrigin);
   };
-  let state = null, ownerOrigin = null, requestId = null, animation = 0, paused = false, started = 0, previous = -1;
-  const reply = message => { if (parent !== window && ownerOrigin !== null) parent.postMessage({ protocol: 1, requestId, ...message }, ownerOrigin === 'null' ? '*' : ownerOrigin); };
+  function integer(value, fallback, min, max, name) {
+    const number = value ?? fallback;
+    if (!Number.isInteger(number) || number < min || number > max) throw new Error(name + ' 参数无效');
+    return number;
+  }
+  function color(value, fallback) {
+    const result = value ?? fallback;
+    if (typeof result !== 'string' || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(result)) throw new Error('颜色须为十六进制 RGB');
+    return result;
+  }
   function build(config) {
-    const text = String(config.text || '');
-    if (!text || text.length > 512) throw new Error('二维码内容长度无效');
-    const version = config.version ?? 5, level = config.ecc ?? 'L', mask = config.mask ?? 7;
-    if (version !== 5 || level !== 'L' || mask !== 7) throw new Error('当前嵌入模式支持版本 5、L 容错、掩码 7');
+    const text = config.text;
+    if (typeof text !== 'string' || text.length > 10000) throw new Error('二维码内容须为不超过 10000 字符的文本');
+    const encoding = config.encoding ?? 'Byte', level = config.ecc ?? 'M';
+    if (!['Byte','Numeric','Alphanumeric'].includes(encoding)) throw new Error('编码格式无效');
+    if (!['L','M','Q','H'].includes(level)) throw new Error('容错等级无效');
+    if (encoding === 'Numeric' && !/^\d*$/.test(text)) throw new Error('Numeric 只允许数字');
+    if (encoding === 'Alphanumeric' && !/^[0-9A-Z $%*+./:\-]*$/.test(text)) throw new Error('Alphanumeric 包含不支持的字符');
+    const rawVersion = config.version === 'auto' ? 0 : config.version;
+    let version = integer(rawVersion, 0, 0, 40, '版本');
+    const mask = integer(config.mask === 'auto' ? -1 : config.mask, -1, -1, 7, '掩码');
     const bytes = new TextEncoder().encode(text);
-    const binary = Array.from(bytes, byte => String.fromCharCode(byte)).join('');
-    const blocks = qrcode.QRRSBlock.getRSBlocks(version, qrcode.QRErrorCorrectionLevel[level]);
-    const dataBytes = blocks.reduce((sum, block) => sum + block.dataCount, 0);
-    const padStart = Math.ceil((4 + 8 + bytes.length * 8 + 4) / 8);
-    if (padStart >= dataBytes) throw new Error('内容过长，版本 5 没有足够的自由绘制空间');
-    const make = (pad, track = false) => { const qr = qrcode(version, level); qr.setModuleBitTracking(track); qr.addData(binary, 'Byte'); qr.setCustomPadBytes(pad); qr.makeMasked(mask); return qr; };
-    const base = make(new Array(dataBytes - padStart).fill(0), true), count = base.getModuleCount();
+    const data = encoding === 'Byte' ? Array.from(bytes, byte => String.fromCharCode(byte)).join('') : text;
+    const mode = {Numeric:1,Alphanumeric:2,Byte:4}[encoding];
+    const payloadLength = encoding === 'Byte' ? bytes.length : text.length;
+    const payloadBits = encoding === 'Byte' ? payloadLength * 8
+      : encoding === 'Numeric' ? Math.floor(payloadLength / 3) * 10 + [0,4,7][payloadLength % 3]
+      : Math.floor(payloadLength / 2) * 11 + payloadLength % 2 * 6;
+    const capacity = v => qrcode.QRRSBlock.getRSBlocks(v, qrcode.QRErrorCorrectionLevel[level]).reduce((sum,b) => sum + b.dataCount,0);
+    const prefixLength = v => 4 + qrcode.QRUtil.getLengthInBits(mode,v) + payloadBits;
+    if (!version) {
+      version = 1;
+      while (version <= 40 && prefixLength(version) > capacity(version) * 8) version++;
+    }
+    if (version > 40 || prefixLength(version) > capacity(version) * 8) throw new Error('内容超过所选二维码版本容量');
+    const blocks = qrcode.QRRSBlock.getRSBlocks(version,qrcode.QRErrorCorrectionLevel[level]);
+    const dataBytes = capacity(version);
+    const padStart = Math.ceil(Math.min(prefixLength(version) + 4, dataBytes * 8) / 8);
+    const createQr = (pad, track = false, chosenMask = mask) => {
+      const qr = qrcode(version, level);
+      qr.setModuleBitTracking(track); qr.addData(data, encoding);
+      if (pad?.length) qr.setCustomPadBytes(pad);
+      if (chosenMask < 0) qr.make(); else qr.makeMasked(chosenMask);
+      return qr;
+    };
+    const base = createQr(null,true), actualMask = base.getMaskPattern(), count = base.getModuleCount();
+    const make = pad => createQr(pad,false,actualMask);
     const offsets = []; let offset = 0;
     for (const block of blocks) { offsets.push(offset); offset += block.dataCount; }
     const streamToLinear = [];
     for (let column = 0; column < Math.max(...blocks.map(block => block.dataCount)); column++)
-      blocks.forEach((block, row) => { if (column < block.dataCount) streamToLinear.push(offsets[row] + column); });
-    const maskFn = qrcode.QRUtil.getMaskFunction(mask), cells = [];
-    for (let y = 0; y < count; y++) for (let x = 0; x < count; x++) {
-      const bit = base.getModuleBitIndex(y, x);
+      blocks.forEach((block,row) => { if (column < block.dataCount) streamToLinear.push(offsets[row] + column); });
+    const maskFn = qrcode.QRUtil.getMaskFunction(actualMask), cells = [];
+    for (let y=0;y<count;y++) for (let x=0;x<count;x++) {
+      const bit = base.getModuleBitIndex(y,x);
       if (bit === null || bit >= dataBytes * 8) continue;
       const linear = streamToLinear[Math.floor(bit / 8)] * 8 + bit % 8;
-      if (linear >= padStart * 8) cells.push({ x, y, bit: linear - padStart * 8, mask: maskFn(y,x) ? 1 : 0 });
+      if (linear >= padStart * 8) cells.push({x,y,bit:linear-padStart*8,mask:maskFn(y,x) ? 1 : 0});
     }
-    const label = text.replace(/^https?:\/\//i, '');
-    const lines = [];
-    for (let i = 0; i < label.length; i += 2) lines.push(label.slice(i,i + 2));
-    return { text, make, base, count, cells, label, lines, padStart, dataBytes, tapeHeight: lines.length * 8 + 16,
-      animate: config.animate !== false, stepMs: 180 / Math.min(4,Math.max(.1,Number(config.speed) || 1)) };
+    let art = null;
+    if (config.art != null) {
+      const input = config.art;
+      const x = integer(input.x,0,0,count-1,'绘制 X'), y = integer(input.y,0,0,count-1,'绘制 Y');
+      const width = integer(input.width,count-x,1,count-x,'绘制宽度'), height = integer(input.height,count-y,1,count-y,'绘制高度');
+      const frames = input.frames;
+      if (!Array.isArray(frames) || !frames.length || frames.length > 512 || frames.length * width * height > 2000000)
+        throw new Error('绘制帧须为 1–512 帧，且总像素数不超过 2000000');
+      for (const frame of frames) if (typeof frame !== 'string' || frame.length !== width*height || /[^01.]/.test(frame))
+        throw new Error('绘制帧须为按行排列的 0、1、. 字符串，长度等于宽乘高');
+      const frameDuration = input.frameDuration ?? 180;
+      if (!Number.isFinite(frameDuration) || frameDuration < 16 || frameDuration > 60000) throw new Error('每帧时长须为 16–60000 毫秒');
+      art = {x,y,width,height,frames,frameDuration,loop:input.loop !== false};
+    }
+    const paddingBackground = config.paddingBackground ?? 'original';
+    if (!['original',0,1].includes(paddingBackground)) throw new Error('paddingBackground 须为 original、0 或 1');
+    const moduleSize = integer(config.moduleSize,8,1,32,'模块边长');
+    const margin = integer(config.margin,moduleSize*4,0,256,'外边距');
+    if (count * moduleSize + 2 * margin > 2048) throw new Error('绘图尺寸不得超过 2048 像素');
+    const moduleScale = config.moduleScale ?? 1, moduleShape = config.moduleShape ?? 'square';
+    if (!Number.isFinite(moduleScale) || moduleScale < .2 || moduleScale > 1) throw new Error('模块缩放须为 0.2–1');
+    if (!['square','circle'].includes(moduleShape)) throw new Error('模块样式须为 square 或 circle');
+    return {text,version,level,mask:actualMask,make,base,count,cells,art,padStart,dataBytes,paddingBackground,
+      moduleSize,margin,moduleScale,moduleShape,foreground:color(config.foreground,'#000000'),background:color(config.background,'#ffffff'),
+      animate:config.animate !== false};
   }
-  function drawFrame(step = 0) {
+  function drawFrame(index = 0) {
     if (!state) return;
-    const s = state, pad = new Array(s.dataBytes - s.padStart).fill(0);
+    const s = state, frames = s.art?.frames;
+    index = integer(index,0,0,frames ? frames.length-1 : 0,'帧索引');
+    const pad = Array.from({length:s.dataBytes-s.padStart},(_,i) => i%2 ? 0x11 : 0xec);
+    const frame = frames?.[index], art = s.art;
     for (const cell of s.cells) {
-      let dark = 0;
-      // Screenshot's central rectangle: columns 11..22, full height. Function modules stay untouched.
-      if (cell.x >= 11 && cell.x < 23) {
-        const sourceY = (cell.y + step) % s.tapeHeight;
-        const line = s.lines[Math.floor(sourceY / 8)], row = sourceY % 8, x = cell.x - 11;
-        if (line && row < 7 && x % 6 < 5) {
-          const glyph = font[line[Math.floor(x / 6)]] || font['?'];
-          if (line[Math.floor(x / 6)]) dark = (glyph[x % 6] >> row) & 1;
-        }
+      let target = s.paddingBackground;
+      if (art && cell.x >= art.x && cell.x < art.x+art.width && cell.y >= art.y && cell.y < art.y+art.height) {
+        const pixel = frame[(cell.y-art.y)*art.width + cell.x-art.x];
+        if (pixel !== '.') target = Number(pixel);
       }
-      if (dark ^ cell.mask) pad[cell.bit >> 3] |= 1 << (7 - cell.bit % 8);
+      if (target === 'original') continue;
+      const bit = 1 << (7-cell.bit%8), byte = cell.bit>>3;
+      if (target ^ cell.mask) pad[byte] |= bit; else pad[byte] &= ~bit;
     }
-    const qr = s.make(pad), moduleSize = 8, margin = 8;
-    const size = s.count * moduleSize + 2 * margin;
+    const qr = s.make(pad), size = s.count*s.moduleSize + 2*s.margin;
     if (canvas.width !== size) canvas.width = canvas.height = size;
-    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,size,size); ctx.fillStyle = '#000';
-    for (let y=0;y<s.count;y++) for(let x=0;x<s.count;x++) if(qr.isDark(y,x)) ctx.fillRect(margin+x*moduleSize,margin+y*moduleSize,moduleSize,moduleSize);
-    s.qr = qr; s.step = step;
+    ctx.fillStyle = s.background; ctx.fillRect(0,0,size,size); ctx.fillStyle = s.foreground;
+    for (let y=0;y<s.count;y++) for(let x=0;x<s.count;x++) if(qr.isDark(y,x)) {
+      const fixed = s.base.getModuleBitIndex(y,x) === null;
+      const scale = fixed ? 1 : s.moduleScale, edge = s.moduleSize*scale;
+      const left = s.margin+x*s.moduleSize+(s.moduleSize-edge)/2, top = s.margin+y*s.moduleSize+(s.moduleSize-edge)/2;
+      if (!fixed && s.moduleShape === 'circle') { ctx.beginPath(); ctx.arc(left+edge/2,top+edge/2,edge/2,0,Math.PI*2); ctx.fill(); }
+      else ctx.fillRect(left,top,edge,edge);
+    }
+    s.qr = qr; s.frameIndex = index;
   }
-  function stop() { cancelAnimationFrame(animation); animation = 0; }
+  function stop() { cancelAnimationFrame(animation); animation = 0; lastTime = null; }
   function tick(time) {
     animation = 0;
     if (!state || paused || document.hidden || !state.animate) return;
-    const step = Math.floor((time - started) / state.stepMs) % state.tapeHeight;
-    if (step !== previous) { drawFrame(step); previous = step; }
+    if (lastTime !== null) elapsed += time-lastTime;
+    lastTime = time;
+    const art = state.art, raw = Math.floor(elapsed/art.frameDuration);
+    const index = art.loop ? raw%art.frames.length : Math.min(raw,art.frames.length-1);
+    if (index !== previous) { drawFrame(index); previous = index; }
+    if (!art.loop && raw >= art.frames.length-1) { finished = true; lastTime = null; return; }
     animation = requestAnimationFrame(tick);
   }
-  function resume() { if (state && !paused && !document.hidden && state.animate && !animation) animation = requestAnimationFrame(tick); }
+  function resume() {
+    if (state?.art?.frames.length > 1 && !paused && !document.hidden && state.animate && !animation && !finished)
+      animation = requestAnimationFrame(tick);
+  }
   function render(config) {
-    stop(); state = build(config); started = performance.now(); previous = 0;
+    stop(); state = build(config); elapsed = 0; previous = 0; finished = false;
     drawFrame(0); canvas.hidden = false; status.hidden = true; canvas.setAttribute('aria-label',state.text); resume();
-    return { size: canvas.width, modules: state.count, label: state.label };
+    const art = state.art;
+    return {size:canvas.width,modules:state.count,version:state.version,ecc:state.level,mask:state.mask,
+      editableModules:state.cells.length,artWritableModules:art ? state.cells.filter(c=>c.x>=art.x&&c.x<art.x+art.width&&c.y>=art.y&&c.y<art.y+art.height).length : 0,
+      frameCount:art?.frames.length ?? 1};
   }
   window.addEventListener('message', event => {
-    if (event.source !== parent || parent === window || event.data?.protocol !== 1) return;
+    if (event.source !== parent || parent === window || event.data?.protocol !== protocol) return;
     if (ownerOrigin !== null && event.origin !== ownerOrigin) return;
     if (event.data.type === 'QR_ART_RENDER') {
       ownerOrigin = event.origin; requestId = event.data.requestId;
-      try { reply({ type: 'QR_ART_RENDERED', ...render(event.data.config || {}) }); }
-      catch (error) { stop(); state = null; canvas.hidden = true; status.hidden = false; status.textContent = '无法生成艺术二维码'; reply({type:'QR_ART_ERROR',message:String(error.message || error)}); }
+      try { reply({type:'QR_ART_RENDERED',...render(event.data.config || {})}); }
+      catch (error) { stop(); state=null; canvas.hidden=true; status.hidden=false; status.textContent='无法生成二维码'; reply({type:'QR_ART_ERROR',message:String(error.message || error)}); }
     } else if (event.data.type === 'QR_ART_PAUSE' && ownerOrigin !== null) {
       paused = event.data.paused === true; if (paused) stop(); else resume();
     }
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else resume(); });
-  window.addEventListener('pagehide', stop);
-  // Useful to local previews/tests; callers have no access to the parent page.
-  globalThis.QRArtEmbed = { render, drawFrame, stop, getState: () => state };
-  if (parent !== window) parent.postMessage({type:'QR_ART_READY',protocol:1}, '*');
+  window.addEventListener('pagehide',stop);
+  globalThis.QRArtEmbed = {render,drawFrame,stop,getState:()=>state};
+  if (parent !== window) parent.postMessage({type:'QR_ART_READY',protocol,capabilities:['bitmap-frames','qr-parameters']},'*');
 })();
