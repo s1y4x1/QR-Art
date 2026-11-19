@@ -34,6 +34,8 @@ var qrcode = function() {
     var _typeNumber = typeNumber;
     var _errorCorrectionLevel = QRErrorCorrectionLevel[errorCorrectionLevel];
     var _modules = null;
+    var _moduleBits = null;
+    var _trackModuleBits = false;
     var _moduleCount = 0;
     var _dataCache = null;
     var _dataList = [];
@@ -54,6 +56,7 @@ var qrcode = function() {
         }
         return modules;
       }(_moduleCount);
+      _moduleBits = _trackModuleBits ? Array.from({length: _moduleCount}, function() { return new Array(_moduleCount).fill(null); }) : null;
 
       setupPositionProbePattern(0, 0);
       setupPositionProbePattern(_moduleCount - 7, 0);
@@ -249,6 +252,7 @@ var qrcode = function() {
               }
 
               _modules[row][col - c] = dark;
+              if (_moduleBits) _moduleBits[row][col - c] = byteIndex * 8 + (7 - bitIndex);
               bitIndex -= 1;
 
               if (bitIndex == -1) {
@@ -446,6 +450,11 @@ var qrcode = function() {
 
     _this.getModuleCount = function() {
       return _moduleCount;
+    };
+    // Interleaved codeword bit index; function modules have no index.
+    _this.setModuleBitTracking = function(enabled) { _trackModuleBits = !!enabled; };
+    _this.getModuleBitIndex = function(row, col) {
+      return _moduleBits ? _moduleBits[row][col] : null;
     };
 
     _this.make = function() {
