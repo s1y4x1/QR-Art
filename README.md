@@ -78,6 +78,4 @@ config.art = {
 
 ### 部署与调试
 
-一起发布 `embed.html`、`embed.css`、`embed.js` 和更新的 `qrcode-lib.js`。v2 不再内置旧演示中的文字滚动规则，调用方应发送自己的像素帧，而不是依赖演示行为。
-
 本地调试可通过 `QRArtEmbed.render(config)`、`drawFrame(index)`、`stop()` 和 `getState()` 检查渲染；这不赋予跨域父页面访问子页面 DOM 的权限。普通编辑器的生成行为不受这些可选接口影响。
