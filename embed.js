@@ -66,7 +66,7 @@
       let dark = 0;
       // Screenshot's central rectangle: columns 11..22, full height. Function modules stay untouched.
       if (cell.x >= 11 && cell.x < 23) {
-        const sourceY = ((cell.y - step) % s.tapeHeight + s.tapeHeight) % s.tapeHeight;
+        const sourceY = (cell.y + step) % s.tapeHeight;
         const line = s.lines[Math.floor(sourceY / 8)], row = sourceY % 8, x = cell.x - 11;
         if (line && row < 7 && x % 6 < 5) {
           const glyph = font[line[Math.floor(x / 6)]] || font['?'];
