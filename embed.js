@@ -122,7 +122,12 @@
     }
     s.qr = qr; s.frameIndex = index;
   }
-  function stop() { cancelAnimationFrame(animation); animation = 0; lastTime = null; }
+  // Cross-origin embedded frames may have rAF suspended by browser power-saving policies.
+  // The artwork only needs one update per bitmap frame, not a display-refresh loop.
+  function schedule() {
+    animation = setTimeout(() => tick(performance.now()), state.art.frameDuration);
+  }
+  function stop() { clearTimeout(animation); animation = 0; lastTime = null; }
   function tick(time) {
     animation = 0;
     if (!state || paused || document.hidden || !state.animate) return;
@@ -132,11 +137,11 @@
     const index = art.loop ? raw%art.frames.length : Math.min(raw,art.frames.length-1);
     if (index !== previous) { drawFrame(index); previous = index; }
     if (!art.loop && raw >= art.frames.length-1) { finished = true; lastTime = null; return; }
-    animation = requestAnimationFrame(tick);
+    schedule();
   }
   function resume() {
     if (state?.art?.frames.length > 1 && !paused && !document.hidden && state.animate && !animation && !finished)
-      animation = requestAnimationFrame(tick);
+      { lastTime = performance.now(); schedule(); }
   }
   function render(config) {
     stop(); state = build(config); elapsed = 0; previous = 0; finished = false;
